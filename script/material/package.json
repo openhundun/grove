@@ -1,0 +1,8 @@
+{
+  "name": "grove-material-preparation",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "material-icon-theme": "5.40.0"
+  }
+}

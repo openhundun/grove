@@ -1,0 +1,4 @@
+[package]
+edition = { workspace = true }
+name              = "grove-core"
+version = { workspace = true }

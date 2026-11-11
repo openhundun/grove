@@ -1,0 +1,23 @@
+[package]
+description = "ELY editor pinned for immutable Grove previews."
+edition      = "2024"
+license      = "MIT"
+name         = "ely-editor"
+repository   = "https://github.com/ELY-Open-Source/Ely-GPUI-Components"
+rust-version = "1.98"
+version      = "0.2.0"
+
+[package.metadata.upstream]
+patch    = "Read-only previews have no user-facing unlock action."
+revision = "01a2135e99bb52fb817b7b62198dbdd24022bcf8"
+
+[features]
+test-support = ["ely-core/test-support", "gpui/test-support", "gpui/leak-detection"]
+
+[dependencies]
+ely-charts = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components.git", rev = "01a2135e99bb52fb817b7b62198dbdd24022bcf8" }
+ely-core   = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components.git", rev = "01a2135e99bb52fb817b7b62198dbdd24022bcf8", default-features = false }
+gpui       = { package = "gpui-pre", version = "=0.3.11", default-features = false }
+log        = { version = "0.4" }
+regex      = { version = "1" }
+serde_json = { version = "1", features = ["preserve_order"] }

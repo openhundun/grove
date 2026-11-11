@@ -1,0 +1,8 @@
+[package]
+edition = { workspace = true }
+name              = "grove-runtime"
+version = { workspace = true }
+
+[dependencies]
+grove-core = { workspace = true }
+grove-platform = { workspace = true }

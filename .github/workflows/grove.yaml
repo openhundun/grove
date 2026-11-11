@@ -1,0 +1,26 @@
+concurrency:
+  cancel-in-progress: true
+  group: grove-${{ github.ref }}
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: rustup show
+      - run: bash script/grove.sh job__check
+    timeout-minutes: 45
+name: grove
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+permissions:
+  contents: read

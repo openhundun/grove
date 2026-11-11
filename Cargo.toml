@@ -1,0 +1,26 @@
+[workspace]
+exclude  = ["vendor/ely-editor"]
+members  = ["source/grove", "source/grove-core", "source/grove-runtime", "source/grove-platform"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+
+[workspace.dependencies]
+ely-core       = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components.git", rev = "01a2135e99bb52fb817b7b62198dbdd24022bcf8", default-features = false, features = ["fonts"] }
+ely-editor     = { path = "vendor/ely-editor" }
+ely-git        = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components.git", rev = "01a2135e99bb52fb817b7b62198dbdd24022bcf8" }
+ely-terminal   = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components.git", rev = "01a2135e99bb52fb817b7b62198dbdd24022bcf8" }
+gpui-kit       = { version = "=0.9.0" }
+grove-core     = { path = "source/grove-core" }
+grove-platform = { path = "source/grove-platform" }
+grove-runtime  = { path = "source/grove-runtime" }
+rust-embed     = { version = "=8.13.0", features = ["include-exclude", "interpolate-folder-path", "debug-embed"] }
+serde_json     = { version = "=1.0.154" }
+
+[profile.dev]
+opt-level = 1
+
+[patch."https://github.com/ELY-Open-Source/Ely-GPUI-Components.git"]
+ely-editor = { path = "vendor/ely-editor" }
