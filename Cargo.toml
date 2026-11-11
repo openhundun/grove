@@ -1,5 +1,5 @@
 [workspace]
-exclude  = ["vendor/ely-editor"]
+exclude  = ["vendor/ely-editor", "vendor/ely-terminal", "vendor/ely-git"]
 members  = ["source/grove", "source/grove-core", "source/grove-runtime", "source/grove-platform"]
 resolver = "3"
 
@@ -10,8 +10,9 @@ version = "0.1.0"
 [workspace.dependencies]
 ely-core       = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components.git", rev = "01a2135e99bb52fb817b7b62198dbdd24022bcf8", default-features = false, features = ["fonts"] }
 ely-editor     = { path = "vendor/ely-editor" }
-ely-git        = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components.git", rev = "01a2135e99bb52fb817b7b62198dbdd24022bcf8" }
-ely-terminal   = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components.git", rev = "01a2135e99bb52fb817b7b62198dbdd24022bcf8" }
+ely-git        = { path = "vendor/ely-git" }
+ely-settings   = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components.git", rev = "01a2135e99bb52fb817b7b62198dbdd24022bcf8" }
+ely-terminal   = { path = "vendor/ely-terminal" }
 gpui-kit       = { version = "=0.9.0" }
 grove-core     = { path = "source/grove-core" }
 grove-platform = { path = "source/grove-platform" }
@@ -24,3 +25,5 @@ opt-level = 1
 
 [patch."https://github.com/ELY-Open-Source/Ely-GPUI-Components.git"]
 ely-editor = { path = "vendor/ely-editor" }
+ely-git    = { path = "vendor/ely-git" }
+ely-terminal = { path = "vendor/ely-terminal" }

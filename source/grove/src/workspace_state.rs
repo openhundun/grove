@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -19,6 +20,22 @@ pub enum FileSelection {
     File(usize),
 }
 
+pub struct ListPanelState {
+    pub tree: bool,
+    pub collapsed_path_set: HashSet<PathBuf>,
+}
+impl ListPanelState {
+    pub fn new(tree: bool) -> Self {
+        Self { tree, collapsed_path_set: HashSet::new() }
+    }
+
+    pub fn toggle_path(&mut self, path: PathBuf) {
+        if !self.collapsed_path_set.remove(&path) {
+            self.collapsed_path_set.insert(path);
+        }
+    }
+}
+
 /// Owned by one workspace tab. Domain identity is retained separately from these view indices.
 pub struct WorkspaceState {
     pub mode: Mode,
@@ -28,14 +45,14 @@ pub struct WorkspaceState {
     pub file: FileSelection,
     pub fs_file: usize,
     pub split: bool,
-    pub tree: bool,
+    pub repository_panel: ListPanelState,
+    pub changes_panel: ListPanelState,
+    pub files_panel: ListPanelState,
     pub preview: bool,
     pub compare: bool,
     pub base: usize,
     pub col_ratio: f32,
     pub row_ratio: f32,
-    pub collapsed_repo_set: HashSet<usize>,
-    pub collapsed_dir_set: HashSet<String>,
     pub session: usize,
 }
 impl Default for WorkspaceState {
@@ -48,14 +65,14 @@ impl Default for WorkspaceState {
             file: FileSelection::File(0),
             fs_file: 0,
             split: false,
-            tree: false,
+            repository_panel: ListPanelState::new(true),
+            changes_panel: ListPanelState::new(false),
+            files_panel: ListPanelState::new(true),
             preview: false,
             compare: false,
             base: 0,
             col_ratio: 0.2,
             row_ratio: 0.5,
-            collapsed_repo_set: HashSet::new(),
-            collapsed_dir_set: HashSet::new(),
             session: 0,
         }
     }

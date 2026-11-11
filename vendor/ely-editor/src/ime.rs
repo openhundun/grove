@@ -95,7 +95,7 @@ impl CodeEditor {
     fn measured(&self, line: usize, window: &Window, cx: &Context<Self>) -> (Shown, Measured) {
         let text = self.row_text(line);
         let shown = Shown::new(text, self.notes(line, cx), self.styles(line, cx));
-        let family = cx.theme().mono_family.clone();
+        let family = self.code_font_family(cx);
         let measured = Measured::new(&shown, family, self.metrics.size, self.metrics.advance, window);
         (shown, measured)
     }

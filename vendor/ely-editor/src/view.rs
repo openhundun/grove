@@ -270,10 +270,10 @@ impl Render for CodeEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let colors = theme.colors.clone();
-        let mono_family = theme.mono_family.clone();
+        let mono_family = self.code_font_family(cx);
         let size = theme.text_size(TextSize::Sm) * self.options.scale;
         let pixels = size.to_pixels(window.rem_size());
-        let mono = window.text_system().resolve_font(&font(theme.mono_family.clone()));
+        let mono = window.text_system().resolve_font(&font(mono_family.clone()));
         let advance = match window.text_system().advance(mono, pixels, 'm') {
             Ok(advance) => advance.width,
             Err(error) => {

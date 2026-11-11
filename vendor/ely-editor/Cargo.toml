@@ -8,7 +8,7 @@ rust-version = "1.98"
 version      = "0.2.0"
 
 [package.metadata.upstream]
-patch    = "Read-only previews have no user-facing unlock action."
+patch    = "Read-only previews have no user-facing unlock action; component font overrides."
 revision = "01a2135e99bb52fb817b7b62198dbdd24022bcf8"
 
 [features]

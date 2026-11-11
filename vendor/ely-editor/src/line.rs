@@ -120,7 +120,7 @@ impl CodeEditor {
         let text = self.row_text(line);
         let range = self.row_range(line);
         let shown = Shown::new(text, self.notes(line, cx), self.styles(line, cx));
-        let measured = Measured::new(&shown, theme.mono_family.clone(), self.metrics.size, advance, window);
+        let measured = Measured::new(&shown, self.code_font_family(cx), self.metrics.size, advance, window);
         // Text where laid out; rulers and guides on grid.
         let x = |column: usize| advance + measured.x(column);
         let grid = |column: usize| advance * (column + 1) as f32;

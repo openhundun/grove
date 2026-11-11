@@ -1,14 +1,13 @@
 use crate::icon::view as icon_view;
 use crate::icon::{self};
+use crate::settings::FontTarget;
 use crate::terminal_session::Session;
 use crate::terminal_session::SessionKey;
 use crate::workspace_state::FileSelection;
 use crate::workspace_state::HistorySelection;
 use crate::workspace_state::Mode;
 use crate::workspace_state::WorkspaceState;
-use ely_core::buttons::SegmentedControl;
 use ely_core::primitives::FocusScope;
-use ely_core::theme::ControlSize;
 use ely_editor::CodeEditor;
 use ely_editor::LineNumbers;
 use ely_git::DiffLayout;
@@ -18,7 +17,6 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::ElementExt as _;
 use gpui_kit::base::h_flex;
 use gpui_kit::base::v_flex;
-use gpui_kit::component::Disableable;
 use gpui_kit::component::Selectable;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::TitleBar;
@@ -40,6 +38,7 @@ mod commit;
 mod detail;
 mod file;
 mod repository;
+mod settings;
 mod terminal;
 mod workspace;
 
@@ -56,7 +55,6 @@ const TITLE_HEIGHT: f32 = 34.;
 const RAIL_WIDTH: f32 = 28.;
 const STATUS_HEIGHT: f32 = 28.;
 const ROW_HEIGHT: f32 = 24.;
-const MONO: &str = grove_platform::MONO_FONT;
 const SESSION_LIST: [&str; 3] = ["Workspace", "Worktree", "Shell 2"];
 
 actions!(grove, [ChangesMode, FilesMode, TerminalMode]);
@@ -81,6 +79,8 @@ struct WorkspaceView {
     worktree_data: Option<WorktreeData>,
     graph_list: Vec<grove_core::commit_graph::GraphRow>,
     history_data: Option<HistoryData>,
+    files_tree: file::FileTree,
+    changes_tree: file::FileTree,
     file_map: HashMap<FileKey, FileView>,
     file_key: Option<FileKey>,
     pending_file: bool,
@@ -108,6 +108,8 @@ impl WorkspaceView {
             worktree_data: None,
             graph_list: Vec::new(),
             history_data: None,
+            files_tree: file::FileTree::default(),
+            changes_tree: file::FileTree::default(),
             file_map: HashMap::new(),
             file_key: None,
             pending_file: false,
@@ -156,17 +158,30 @@ pub struct Grove {
     focus: FocusHandle,
     body_bounds: Rc<Cell<Bounds<Pixels>>>,
     drag_axis: Option<DragAxis>,
+    settings: crate::settings::Settings,
+    settings_panel: Entity<settings::SettingsPanel>,
+    _settings_subscription: Subscription,
+    settings_open: bool,
 }
 impl Grove {
     pub fn new(root_list: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        let (settings, error) = crate::settings::Settings::load(cx);
+        let settings_panel = cx.new(|cx| settings::SettingsPanel::new(&settings, error, window, cx));
+        let settings_subscription = cx.subscribe(&settings_panel, |this, _, event: &settings::FontChange, cx| {
+            this.set_font(event.target, event.family.clone(), cx);
+        });
         let mut this = Self {
             workspace_list: root_list.into_iter().map(WorkspaceView::new).collect(),
             active: 0,
             focus,
             body_bounds: Rc::new(Cell::new(Bounds::default())),
             drag_axis: None,
+            settings,
+            settings_panel,
+            _settings_subscription: settings_subscription,
+            settings_open: false,
         };
         for index in 0..this.workspace_list.len() {
             this.refresh(index, cx);
@@ -181,6 +196,37 @@ impl Grove {
     }
     fn state_mut(&mut self) -> &mut WorkspaceState {
         &mut self.workspace_list[self.active].state
+    }
+
+    fn set_font(&mut self, target: FontTarget, family: SharedString, cx: &mut Context<Self>) {
+        self.settings.set_font(target, family.clone());
+        match target {
+            FontTarget::Editor => {
+                for view in &self.workspace_list {
+                    if let Some(editor) = &view.message_editor {
+                        editor.update(cx, |editor, cx| editor.set_font_family(family.clone(), cx));
+                    }
+                    for file in view.file_map.values() {
+                        if let Some(editor) = &file.editor {
+                            editor.update(cx, |editor, cx| editor.set_font_family(family.clone(), cx));
+                        }
+                    }
+                }
+            }
+            FontTarget::Terminal => {
+                for view in &self.workspace_list {
+                    for session in view.session_map.values() {
+                        if let Some(terminal) = &session.terminal {
+                            terminal.update(cx, |terminal, cx| terminal.set_font_family(family.clone(), cx));
+                        }
+                    }
+                }
+            }
+            FontTarget::Repositories | FontTarget::Changes | FontTarget::Files | FontTarget::Commits => {}
+        }
+        let error = self.settings.save().err();
+        self.settings_panel.update(cx, |panel, cx| panel.set_error(error, cx));
+        cx.notify();
     }
 
     fn request(&mut self, index: usize, request: ReadRequest, cx: &mut Context<Self>) {
@@ -258,6 +304,7 @@ impl Grove {
                 if view.state.base >= data.base_ref_list.len() {
                     view.state.base = 0;
                 }
+                view.files_tree = file::FileTree::from_paths(data.file_list.iter().map(|path| path.as_path()));
                 view.worktree_data = Some(data);
                 view.graph_list = grove_core::commit_graph::project(&view.worktree_data.as_ref().unwrap().commit_list);
                 self.load_history(index, cx);
@@ -272,6 +319,7 @@ impl Grove {
                 if !matches!(view.state.file, FileSelection::Message) {
                     view.state.file = FileSelection::File(selected);
                 }
+                view.changes_tree = file::FileTree::from_paths(data.file_list.iter().map(|file| file.path.as_path()));
                 view.history_data = Some(data);
                 self.load_file(index, cx);
             }
@@ -365,6 +413,8 @@ impl Grove {
         view.state.fs_file = 0;
         view.worktree_data = None;
         view.history_data = None;
+        view.files_tree = file::FileTree::default();
+        view.changes_tree = file::FileTree::default();
         view.file_key = None;
         view.file_map.clear();
         let root = view.root.clone();
@@ -380,6 +430,7 @@ impl Grove {
         };
         view.selected_file = None;
         view.history_data = None;
+        view.changes_tree = file::FileTree::default();
         view.file_key = None;
         self.load_history(self.active, cx);
         cx.notify();
@@ -400,7 +451,8 @@ impl Grove {
         if self.state().mode == Mode::Terminal {
             let key = self.view().session_key(self.state().session);
             let view = &mut self.workspace_list[self.active];
-            let session = view.session_map.entry(key.clone()).or_insert_with(|| Session::spawn(&key, window, cx));
+            let font_family = self.settings.terminal_font.clone();
+            let session = view.session_map.entry(key.clone()).or_insert_with(|| Session::spawn(&key, font_family, window, cx));
             if view.terminal_focus {
                 if let Some(terminal) = &session.terminal {
                     window.focus(&terminal.focus_handle(cx), cx);
@@ -413,7 +465,14 @@ impl Grove {
         if view.message_editor.is_none()
             && let Some(history) = &view.history_data
         {
-            view.message_editor = Some(cx.new(|cx| CodeEditor::new(history.message.clone(), window, cx).language("markdown").line_numbers(LineNumbers::Hidden).read_only()));
+            let font_family = self.settings.editor_font.clone();
+            view.message_editor = Some(cx.new(|cx| {
+                CodeEditor::new(history.message.clone(), window, cx)
+                    .language("markdown")
+                    .line_numbers(LineNumbers::Hidden)
+                    .font_family(font_family)
+                    .read_only()
+            }));
         }
         let Some(file) = view.file_key.as_ref().and_then(|key| view.file_map.get_mut(key)) else {
             return;
@@ -434,7 +493,10 @@ impl Grove {
             };
             let syntax = ely_core::forms::syntax_of(&file.data.path.to_string_lossy());
             file.editor = Some(cx.new(|cx| {
-                let editor = CodeEditor::new(source.to_string(), window, cx).language(language).read_only();
+                let editor = CodeEditor::new(source.to_string(), window, cx)
+                    .language(language)
+                    .font_family(self.settings.editor_font.clone())
+                    .read_only();
                 if let Some(syntax) = syntax {
                     editor.highlighter(move |text, cx| ely_core::forms::code_highlights_with(text, syntax, cx))
                 } else {
@@ -511,38 +573,56 @@ impl Grove {
 impl Render for Grove {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.hydrate(window, cx);
-        let viewport = window.viewport_size();
-        let width = (f32::from(viewport.width) - RAIL_WIDTH).max(600.);
-        let height = (f32::from(viewport.height) - TITLE_HEIGHT - STATUS_HEIGHT).max(300.);
-        let col = (width * self.state().col_ratio).clamp(200., width - 360.);
-        let row = (height * self.state().row_ratio).clamp(90., height - 90.);
-        let bounds = self.body_bounds.clone();
-        let lower_left = if self.state().mode == Mode::Terminal { self.sessions(cx) } else { self.files(cx) };
-        let main = h_flex()
-            .relative()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .overflow_hidden()
-            .on_prepaint(move |value, _, _| bounds.set(value))
-            .child(
-                v_flex()
-                    .w(px(col))
-                    .h_full()
-                    .flex_shrink_0()
-                    .child(div().h(px(row)).flex_shrink_0().overflow_hidden().child(self.repositories(cx)))
-                    .child(div().flex_1().min_h_0().overflow_hidden().child(lower_left)),
-            )
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .child(div().h(px(row)).flex_shrink_0().overflow_hidden().child(self.commits(cx)))
-                    .child(div().flex_1().min_h_0().overflow_hidden().child(self.detail(cx))),
-            )
-            .child(self.splitter(DragAxis::Column, col, cx))
-            .child(self.splitter(DragAxis::Row, row, cx));
+        let body = if self.settings_open {
+            let head = self
+                .chrome("Settings")
+                .child(div().flex_1())
+                .child(Button::new("close-settings").icon(IconName::X).ghost().xsmall().on_click(cx.listener(|this, _, window, cx| {
+                    this.settings_open = false;
+                    window.focus(&this.focus, cx);
+                    cx.notify();
+                })));
+            v_flex()
+                .flex_1()
+                .min_h_0()
+                .child(head)
+                .child(div().flex_1().min_h_0().child(self.settings_panel.clone()))
+                .into_any_element()
+        } else {
+            let viewport = window.viewport_size();
+            let width = (f32::from(viewport.width) - RAIL_WIDTH).max(600.);
+            let height = (f32::from(viewport.height) - TITLE_HEIGHT - STATUS_HEIGHT).max(300.);
+            let col = (width * self.state().col_ratio).clamp(200., width - 360.);
+            let row = (height * self.state().row_ratio).clamp(90., height - 90.);
+            let bounds = self.body_bounds.clone();
+            let lower_left = if self.state().mode == Mode::Terminal { self.sessions(cx) } else { self.files(cx) };
+            let main = h_flex()
+                .relative()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .overflow_hidden()
+                .on_prepaint(move |value, _, _| bounds.set(value))
+                .child(
+                    v_flex()
+                        .w(px(col))
+                        .h_full()
+                        .flex_shrink_0()
+                        .child(div().h(px(row)).flex_shrink_0().overflow_hidden().child(self.repositories(cx)))
+                        .child(div().flex_1().min_h_0().overflow_hidden().child(lower_left)),
+                )
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .child(div().h(px(row)).flex_shrink_0().overflow_hidden().child(self.commits(cx)))
+                        .child(div().flex_1().min_h_0().overflow_hidden().child(self.detail(cx))),
+                )
+                .child(self.splitter(DragAxis::Column, col, cx))
+                .child(self.splitter(DragAxis::Row, row, cx));
+            h_flex().flex_1().min_h_0().overflow_hidden().child(self.rail(cx)).child(main).into_any_element()
+        };
         div()
             .size_full()
             .key_context("Grove")
@@ -581,7 +661,7 @@ impl Render for Grove {
                         .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.drag_axis = None))
                         .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, _| this.drag_axis = None))
                         .child(self.title_bar(cx))
-                        .child(h_flex().flex_1().min_h_0().overflow_hidden().child(self.rail(cx)).child(main))
+                        .child(body)
                         .child(self.status_bar(cx)),
                 ),
             )

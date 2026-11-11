@@ -70,6 +70,7 @@ pub enum EditorEvent {
 #[derive(Clone, Debug)]
 pub(crate) struct Options {
     pub language: SharedString,
+    pub font_family: Option<SharedString>,
     pub numbers: LineNumbers,
     pub cursor: CursorShape,
     pub whitespace: bool,
@@ -234,6 +235,7 @@ impl CodeEditor {
             folded: BTreeSet::new(),
             options: Options {
                 language: "Plain text".into(),
+                font_family: None,
                 numbers: LineNumbers::Absolute,
                 cursor: CursorShape::Line,
                 whitespace: false,
@@ -270,6 +272,26 @@ impl CodeEditor {
     pub fn language(mut self, name: impl Into<SharedString>) -> Self {
         self.options.language = name.into();
         self
+    }
+
+    /// This editor's code font, leaving the global theme unchanged; otherwise the theme's mono font.
+    pub fn font_family(mut self, family: impl Into<SharedString>) -> Self {
+        self.options.font_family = Some(family.into());
+        self
+    }
+
+    /// Changes only this editor's code font, leaving the global theme unchanged.
+    pub fn set_font_family(&mut self, family: impl Into<SharedString>, cx: &mut Context<Self>) {
+        let family = family.into();
+        if self.options.font_family.as_ref() == Some(&family) {
+            return;
+        }
+        self.options.font_family = Some(family);
+        cx.notify();
+    }
+
+    pub(crate) fn code_font_family(&self, cx: &App) -> SharedString {
+        self.options.font_family.clone().unwrap_or_else(|| cx.theme().mono_family.clone())
     }
 
     /// How the gutter numbers lines, from the first unless set.

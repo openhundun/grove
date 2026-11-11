@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 mod icon;
 mod patch_view;
+mod settings;
 mod terminal_session;
 mod ui;
 mod workspace_state;

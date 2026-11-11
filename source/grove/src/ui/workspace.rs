@@ -94,6 +94,7 @@ impl Grove {
     }
     pub(super) fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let view = self.view();
+        let font_family = self.settings.repositories_font.clone();
         let path = view.selected_worktree.as_ref().unwrap_or(&view.root).clone();
         let label = view
             .worktree_data
@@ -112,9 +113,22 @@ impl Grove {
             .bg(rgb(SURFACE))
             .border_t_1()
             .border_color(rgb(BORDER))
-            .child(Button::new("settings").icon(IconName::Settings).ghost().xsmall().disabled(true).tooltip("Settings are not implemented"))
+            .child(
+                Button::new("settings")
+                    .icon(IconName::Settings)
+                    .ghost()
+                    .xsmall()
+                    .selected(self.settings_open)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.settings_open = !this.settings_open;
+                        if !this.settings_open {
+                            window.focus(&this.focus, cx);
+                        }
+                        cx.notify();
+                    })),
+            )
             .child(icon_view(IconName::GitBranch, 12., ACCENT))
-            .child(label)
+            .child(div().font_family(font_family.clone()).child(label))
             .child(
                 div()
                     .id("copy-worktree-path")
@@ -122,17 +136,20 @@ impl Grove {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .font_family(MONO)
+                    .font_family(font_family.clone())
                     .text_size(px(9.5))
                     .text_color(rgb(META))
                     .child(path.to_string_lossy().into_owned())
                     .on_click(cx.listener(move |_, _, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(path.to_string_lossy().into_owned())))),
             )
             .child(
-                div()
+                h_flex()
                     .text_size(px(9.5))
                     .text_color(rgb(META))
-                    .child(format!("{count} repositories · {warning_count} warnings · Git read-only · Terminal")),
+                    .child(div().font_family(font_family.clone()).child(count.to_string()))
+                    .child(" repositories · ")
+                    .child(div().font_family(font_family).child(warning_count.to_string()))
+                    .child(" warnings · Git read-only · Terminal"),
             )
     }
 }

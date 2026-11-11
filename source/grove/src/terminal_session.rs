@@ -24,7 +24,7 @@ impl Session {
             None => "Error",
         }
     }
-    pub fn spawn(key: &SessionKey, window: &mut Window, cx: &mut App) -> Self {
+    pub fn spawn(key: &SessionKey, font_family: SharedString, window: &mut Window, cx: &mut App) -> Self {
         let config = grove_platform::shell_launch(&key.cwd);
         let program = match config.program.into_string() {
             Ok(program) => program,
@@ -37,7 +37,7 @@ impl Session {
         let launch = Launch { cwd: Some(config.cwd), program: Some((program, argument_list)), env: Vec::new() };
         let mut error = None;
         let terminal = cx.new(|cx| match Terminal::spawn(launch, cx) {
-            Ok(terminal) => terminal,
+            Ok(terminal) => terminal.font_family(font_family.clone()),
             Err(reason) => {
                 error = Some(format!("Unable to start terminal: {reason:#}"));
                 // GPUI's entity builder is infallible. Discard this inert entity below.
