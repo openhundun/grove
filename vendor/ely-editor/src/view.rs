@@ -1,4 +1,3 @@
-use super::decor::ReadOnlyBanner;
 use super::keys::CONTEXT;
 use super::keys::listen;
 use super::layout::Row;
@@ -19,6 +18,7 @@ use gpui::Context;
 use gpui::ElementInputHandler;
 use gpui::InteractiveElement;
 use gpui::IntoElement;
+use gpui::ListHorizontalSizingBehavior;
 use gpui::MouseButton;
 use gpui::MouseDownEvent;
 use gpui::MouseMoveEvent;
@@ -35,8 +35,8 @@ use gpui::Window;
 use gpui::canvas;
 use gpui::div;
 use gpui::fill;
-use gpui::font;
 use gpui::point;
+use gpui::px;
 use gpui::size;
 use gpui::uniform_list;
 use std::ops::Range;
@@ -57,8 +57,6 @@ pub(crate) struct Frame {
     pub minimap: Bounds<Pixels>,
 }
 
-/// Lines of code a row's height holds, as leading.
-const LEADING: f32 = 1.6;
 /// Blocks the sticky header shows at most.
 const STICKY: usize = 3;
 /// Columns the minimap spans, in code characters.
@@ -83,7 +81,7 @@ impl CodeEditor {
         self.scroll.scroll_to_item_strict(line + self.pad, ScrollStrategy::Top);
     }
 
-    /// The handle the code scrolls by, for a bar beside it.
+    /// The shared horizontal and vertical scroll offset and bounds, for bars beside the code.
     pub fn scroll_handle(&self) -> ScrollHandle {
         self.scroll.0.borrow().base_handle.clone()
     }
@@ -131,11 +129,16 @@ impl CodeEditor {
                 })
                 .child(div().flex_none().w(self.frame.advance * (self.gutter_columns() + 1) as f32))
                 .child(
-                    div()
-                        .line_height(self.frame.line)
-                        .whitespace_nowrap()
-                        .text_color(colors.syntax.variable)
-                        .child(StyledText::new(text).with_highlights(styles)),
+                    div().flex_1().min_w_0().overflow_hidden().child(
+                        div()
+                            .relative()
+                            .left(self.scroll_handle().offset().x)
+                            .w(self.content_width())
+                            .line_height(self.frame.line)
+                            .whitespace_nowrap()
+                            .text_color(colors.syntax.variable)
+                            .child(StyledText::new(text).with_highlights(styles)),
+                    ),
                 )
         });
         Some(
@@ -236,7 +239,7 @@ impl CodeEditor {
         let state = self.scroll.0.borrow();
         let viewport = state.base_handle.bounds().size.height;
         let top = (self.frame.line * row - viewport / 2.0).max(Pixels::ZERO);
-        state.base_handle.set_offset(point(Pixels::ZERO, -top));
+        state.base_handle.set_offset(point(state.base_handle.offset().x, -top));
         drop(state);
         cx.notify();
     }
@@ -244,6 +247,8 @@ impl CodeEditor {
     /// Text size against the theme's, for a writing view.
     pub fn set_scale(&mut self, scale: f32, cx: &mut Context<Self>) {
         self.options.scale = scale;
+        self.extent = None;
+        self.centered = None;
         cx.notify();
     }
 
@@ -270,10 +275,9 @@ impl Render for CodeEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let colors = theme.colors.clone();
-        let mono_family = self.code_font_family(cx);
-        let size = theme.text_size(TextSize::Sm) * self.options.scale;
-        let pixels = size.to_pixels(window.rem_size());
-        let mono = window.text_system().resolve_font(&font(mono_family.clone()));
+        let code_font = self.code_font(cx);
+        let pixels = self.options.font_size.map(px).unwrap_or_else(|| theme.text_size(TextSize::Sm).to_pixels(window.rem_size())) * self.options.scale;
+        let mono = window.text_system().resolve_font(&code_font);
         let advance = match window.text_system().advance(mono, pixels, 'm') {
             Ok(advance) => advance.width,
             Err(error) => {
@@ -281,11 +285,11 @@ impl Render for CodeEditor {
                 pixels * 0.6
             }
         };
-        let line = (pixels * LEADING).round();
+        let line = (pixels * self.options.line_height).round();
         let found = folds(&self.buffer);
         let hide = hidden(self.buffer.lines(), &found, &self.folded);
         let found_brackets = brackets(&self.buffer);
-        let matched = syntax::matched(&found_brackets, self.primary().head);
+        let matched = self.options.show_caret.then(|| syntax::matched(&found_brackets, self.primary().head)).flatten();
         let occurrences = match self.needle() {
             Some(needle) if self.focus.is_focused(window) => syntax::occurrences(&self.buffer, &needle, 0..self.buffer.lines()),
             _ => Vec::new(),
@@ -313,6 +317,7 @@ impl Render for CodeEditor {
         self.metrics.advance = advance;
         self.metrics.line = line;
         self.metrics.size = pixels;
+        self.measure_extent(window, cx);
         // Typewriter: the caret's row centers as it moves.
         let centered = (self.primary_row(), self.metrics.height, line);
         if self.options.typewriter && self.centered != Some(centered) {
@@ -327,33 +332,47 @@ impl Render for CodeEditor {
             cx.processor(|editor, range: Range<usize>, window, cx| range.map(|ix| editor.row(ix, window, cx)).collect()),
         )
         .track_scroll(&self.scroll)
+        .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
+        .pb(if line * count as f32 > self.metrics.height || self.content_width() > self.scroll_handle().bounds().size.width {
+            line.max(px(16.0))
+        } else {
+            Pixels::ZERO
+        })
         .size_full();
         let (top, focus, input) = (cx.entity(), self.focus.clone(), cx.entity());
-        let banner = self.options.read_only.then(|| ReadOnlyBanner::new(("read-only", cx.entity_id().as_u64()), "This file is read-only."));
-        let body = div().relative().flex_1().h_full().min_h_0().child(list).children(sticky).child(
-            canvas(
-                move |bounds, window, cx| {
-                    // The list's text style, so its wheel line.
-                    let wheel = window.line_height();
-                    let resized = top.update(cx, |editor, _| {
-                        editor.metrics.wheel = wheel;
-                        editor.metrics.top = bounds.origin.y;
-                        let resized = editor.metrics.height != bounds.size.height;
-                        editor.metrics.height = bounds.size.height;
-                        resized
-                    });
-                    // A new height centers the caret again.
-                    if resized {
-                        window.request_animation_frame();
-                    }
-                },
-                |_, _, _, _| {},
+        let body = div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .min_h_0()
+            .child(
+                canvas(
+                    move |bounds, window, cx| {
+                        // The list's text style, so its wheel line.
+                        let wheel = window.line_height();
+                        let resized = top.update(cx, |editor, cx| {
+                            editor.metrics.wheel = wheel;
+                            editor.metrics.top = bounds.origin.y;
+                            let resized = editor.metrics.height != bounds.size.height;
+                            editor.metrics.height = bounds.size.height;
+                            editor.prepare_scroll(bounds, window, cx);
+                            resized
+                        });
+                        // A new height centers the caret again.
+                        if resized {
+                            window.request_animation_frame();
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
             )
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full(),
-        );
+            .child(list)
+            .children(sticky);
         let root = div()
             .id(("code-editor", cx.entity_id().as_u64()))
             .role(Role::MultilineTextInput)
@@ -365,12 +384,13 @@ impl Render for CodeEditor {
             .flex_col()
             .overflow_hidden()
             .bg(colors.surface)
-            .font_family(mono_family)
-            .text_size(size)
+            .font_family(code_font.family)
+            .font_weight(code_font.weight)
+            .text_size(pixels)
+            .line_height(line)
             .text_color(colors.fg)
             .on_mouse_up(MouseButton::Left, cx.listener(|editor, _, _, _| editor.dragging = false))
             .on_mouse_up_out(MouseButton::Left, cx.listener(|editor, _, _, _| editor.dragging = false))
-            .children(banner)
             .child(div().relative().flex_1().min_h_0().flex().child(body).children(self.options.minimap.then(|| self.minimap_view(cx))))
             .child(
                 canvas(

@@ -1,8 +1,6 @@
 use super::cursor::Selection;
 use super::gutter::Cell;
-use super::layout::Shown;
 use super::layout::stack;
-use super::measure::Measured;
 use super::state::CodeEditor;
 use super::state::CursorShape;
 use crate::charts::tint;
@@ -23,7 +21,6 @@ use gpui::Styled;
 use gpui::StyledText;
 use gpui::UnderlineStyle;
 use gpui::Window;
-use gpui::canvas;
 use gpui::div;
 use gpui::prelude::*;
 use std::ops::Range;
@@ -98,10 +95,14 @@ impl CodeEditor {
             while let Some((_, words, _)) = note.next_if(|(place, ..)| *place <= at) {
                 out.push_str(words);
             }
+            let column = out.chars().count();
             match ch {
                 ' ' | '\t' => {
                     hide.push((start..out.len(), hidden));
                     out.push(if ch == ' ' { '·' } else { '→' });
+                    if ch == '\t' {
+                        out.extend(std::iter::repeat_n(' ', self.options.tab - column % self.options.tab - 1));
+                    }
                 }
                 _ => {
                     out.push(ch);
@@ -119,11 +120,11 @@ impl CodeEditor {
         let (advance, height) = (self.frame.advance, self.frame.line);
         let text = self.row_text(line);
         let range = self.row_range(line);
-        let shown = Shown::new(text, self.notes(line, cx), self.styles(line, cx));
-        let measured = Measured::new(&shown, self.code_font_family(cx), self.metrics.size, advance, window);
-        // Text where laid out; rulers and guides on grid.
-        let x = |column: usize| advance + measured.x(column);
-        let grid = |column: usize| advance * (column + 1) as f32;
+        let (shown, measured) = self.measured(line, window, cx);
+        // Everything drawn over the code shares its scroll, inside the fixed clip.
+        let scrolled = self.scroll_handle().offset().x;
+        let x = |column: usize| advance + scrolled + measured.x(column);
+        let grid = |column: usize| advance * (column + 1) as f32 + scrolled;
         let focused = self.focus.is_focused(window);
         let primary = self.primary();
         let current = primary.is_empty() && self.buffer.line_of(primary.head) == line;
@@ -177,7 +178,7 @@ impl CodeEditor {
             .selections
             .iter()
             .filter(|selection| self.buffer.line_of(selection.head) == line)
-            .filter(|_| focused && self.caret_on)
+            .filter(|_| self.options.show_caret && focused && self.caret_on)
             .map(|selection| {
                 let column = column_of(selection.head);
                 let (left, wide) = (x(column), x(column + 1) - x(column));
@@ -194,6 +195,7 @@ impl CodeEditor {
                 .absolute()
                 .top_0()
                 .left(x(0))
+                .w(measured.width() + advance)
                 .h(height)
                 .line_height(height)
                 .whitespace_nowrap()
@@ -226,15 +228,15 @@ impl CodeEditor {
                 })
         });
         let added = self.marks.hunks.iter().any(|hunk| (hunk.line..hunk.line + hunk.added).contains(&line));
-        let entity = cx.entity();
         let left = x(0);
         let code = div()
             .id(("code", row))
             .relative()
             .flex_1()
+            .min_w_0()
             .h_full()
             .overflow_hidden()
-            .when(current && focused, |code| code.bg(colors.hover))
+            .when(self.options.show_caret && current && focused, |code| code.bg(colors.hover))
             .when(added, |code| code.bg(colors.success.opacity(0.08)))
             .children(selections)
             .children(guides)
@@ -244,6 +246,7 @@ impl CodeEditor {
                     .absolute()
                     .top_0()
                     .left(left)
+                    .w(measured.width() + advance)
                     .h(height)
                     .line_height(height)
                     .whitespace_nowrap()
@@ -253,23 +256,6 @@ impl CodeEditor {
             .children(dots)
             .children(folded)
             .children(carets)
-            .child(
-                canvas(
-                    move |bounds, _, cx| {
-                        let origin = bounds.origin.x + left;
-                        entity.update(cx, |editor, _| {
-                            if editor.metrics.left != origin {
-                                editor.metrics.left = origin;
-                            }
-                        });
-                    },
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full(),
-            )
             .on_mouse_down(MouseButton::Left, cx.listener(move |editor, event: &MouseDownEvent, window, cx| editor.press(line, event, window, cx)))
             .on_mouse_down(
                 MouseButton::Right,

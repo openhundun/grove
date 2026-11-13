@@ -84,6 +84,7 @@ impl CodeEditor {
     pub(crate) fn single_cursor(&mut self, cx: &mut Context<Self>) {
         let primary = self.primary();
         self.marks.ghost = None;
+        self.extent = None;
         self.set_selections(vec![Selection::caret(primary.head)], cx);
     }
 
@@ -140,6 +141,7 @@ impl CodeEditor {
     pub(crate) fn reveal(&mut self, down: bool, cx: &mut Context<Self>) {
         let strategy = if down { ScrollStrategy::Bottom } else { ScrollStrategy::Top };
         self.scroll.scroll_to_item(self.primary_row(), strategy);
+        self.reveal_x = true;
         cx.notify();
     }
 }

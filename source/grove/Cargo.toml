@@ -1,17 +1,17 @@
 [package]
 edition = { workspace = true }
-name              = "grove"
+name    = "grove"
 version = { workspace = true }
 
 [dependencies]
-ely-core = { workspace = true }
-ely-editor = { workspace = true }
-ely-git = { workspace = true }
-ely-settings = { workspace = true }
-ely-terminal = { workspace = true }
-gpui-kit = { workspace = true }
-grove-core = { workspace = true }
+ely-core       = { workspace = true }
+ely-editor     = { workspace = true }
+ely-git        = { workspace = true }
+ely-terminal   = { workspace = true }
+gpui-kit       = { workspace = true }
+grove-core     = { workspace = true }
 grove-platform = { workspace = true }
-grove-runtime = { workspace = true }
-rust-embed = { workspace = true }
-serde_json = { workspace = true }
+grove-runtime  = { workspace = true }
+markdown       = { workspace = true }
+rust-embed     = { workspace = true }
+serde_json     = { workspace = true }

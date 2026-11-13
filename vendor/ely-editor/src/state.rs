@@ -8,23 +8,28 @@ use super::decor::DiffHunk;
 use super::decor::GhostText;
 use super::decor::GitMark;
 use super::decor::InlayHint;
+use super::measure::Extent;
 use super::view::Frame;
 use crate::forms::History;
 use crate::forms::InputEvent;
 use crate::forms::TextInput;
 use crate::theme::ActiveTheme;
+use crate::theme::Theme;
 use gpui::App;
 use gpui::AppContext as _;
 use gpui::Context;
 use gpui::EventEmitter;
 use gpui::FocusHandle;
 use gpui::Focusable;
+use gpui::Font;
+use gpui::FontWeight;
 use gpui::Pixels;
 use gpui::SharedString;
 use gpui::Subscription;
 use gpui::Task;
 use gpui::UniformListScrollHandle;
 use gpui::Window;
+use gpui::font;
 use std::collections::BTreeSet;
 use std::ops::Range;
 use std::time::Duration;
@@ -71,8 +76,12 @@ pub enum EditorEvent {
 pub(crate) struct Options {
     pub language: SharedString,
     pub font_family: Option<SharedString>,
+    pub font_size: Option<f32>,
+    pub font_weight: FontWeight,
+    pub line_height: f32,
     pub numbers: LineNumbers,
     pub cursor: CursorShape,
+    pub show_caret: bool,
     pub whitespace: bool,
     pub guides: bool,
     pub rulers: Vec<usize>,
@@ -133,8 +142,9 @@ pub struct Metrics {
 }
 
 const BLINK: Duration = Duration::from_millis(530);
+const LEADING: f32 = 1.6;
 
-/// Code to read and edit: syntax colors, many cursors, folds, a gutter, a minimap, and what tools lay over it.
+/// Unwrapped code to read and edit, with a fixed gutter and shared two-axis scrolling.
 ///
 /// ```
 /// use ely_editor::{CodeEditor, CursorShape, LineNumbers};
@@ -165,6 +175,9 @@ pub struct CodeEditor {
     /// The text before an input method's composition began, while it runs.
     pub(crate) composing: Option<Snapshot>,
     pub(crate) metrics: Metrics,
+    pub(crate) extent: Option<Extent>,
+    /// A keyboard move or edit reveals the caret after the next layout.
+    pub(crate) reveal_x: bool,
     /// The caret row, view and line heights last centered.
     pub(crate) centered: Option<(usize, Pixels, Pixels)>,
     /// Typewriter room rows at each end.
@@ -202,6 +215,10 @@ impl CodeEditor {
         let focus = cx.focus_handle().tab_stop(true);
         let chat_field = cx.new(|cx| TextInput::new(window, cx).placeholder("Ask to change this code"));
         let subscriptions = vec![
+            cx.observe_global::<Theme>(|editor, cx| {
+                editor.extent = None;
+                cx.notify();
+            }),
             cx.on_focus(&focus, window, |editor, _, cx| {
                 editor.focused = true;
                 editor.restart_blink(cx);
@@ -236,8 +253,12 @@ impl CodeEditor {
             options: Options {
                 language: "Plain text".into(),
                 font_family: None,
+                font_size: None,
+                font_weight: FontWeight::NORMAL,
+                line_height: LEADING,
                 numbers: LineNumbers::Absolute,
                 cursor: CursorShape::Line,
+                show_caret: true,
                 whitespace: false,
                 guides: true,
                 rulers: Vec::new(),
@@ -255,6 +276,8 @@ impl CodeEditor {
             marked: None,
             composing: None,
             metrics: Metrics::default(),
+            extent: None,
+            reveal_x: false,
             centered: None,
             pad: 0,
             dragging: false,
@@ -280,6 +303,24 @@ impl CodeEditor {
         self
     }
 
+    /// Code text size in pixels; otherwise the theme's small text size.
+    pub fn font_size(mut self, size: f32) -> Self {
+        self.options.font_size = Some(size);
+        self
+    }
+
+    /// The base code weight; semantic bold and italic highlights still override it.
+    pub fn font_weight(mut self, weight: FontWeight) -> Self {
+        self.options.font_weight = weight;
+        self
+    }
+
+    /// Row height as a multiple of the code text size; defaults to 1.6.
+    pub fn line_height(mut self, multiplier: f32) -> Self {
+        self.options.line_height = multiplier;
+        self
+    }
+
     /// Changes only this editor's code font, leaving the global theme unchanged.
     pub fn set_font_family(&mut self, family: impl Into<SharedString>, cx: &mut Context<Self>) {
         let family = family.into();
@@ -287,11 +328,30 @@ impl CodeEditor {
             return;
         }
         self.options.font_family = Some(family);
+        self.extent = None;
+        self.centered = None;
         cx.notify();
     }
 
-    pub(crate) fn code_font_family(&self, cx: &App) -> SharedString {
-        self.options.font_family.clone().unwrap_or_else(|| cx.theme().mono_family.clone())
+    /// Recomputes this editor's font metrics on the next paint without changing text or selections.
+    pub fn set_typography(&mut self, family: SharedString, size: f32, weight: FontWeight, line_height: f32, cx: &mut Context<Self>) {
+        if self.options.font_family.as_ref() == Some(&family) && self.options.font_size == Some(size) && self.options.font_weight == weight && self.options.line_height == line_height {
+            return;
+        }
+        self.options.font_family = Some(family);
+        self.options.font_size = Some(size);
+        self.options.font_weight = weight;
+        self.options.line_height = line_height;
+        self.extent = None;
+        self.centered = None;
+        cx.notify();
+    }
+
+    pub(crate) fn code_font(&self, cx: &App) -> Font {
+        Font {
+            weight: self.options.font_weight,
+            ..font(self.options.font_family.clone().unwrap_or_else(|| cx.theme().mono_family.clone()))
+        }
     }
 
     /// How the gutter numbers lines, from the first unless set.
@@ -303,6 +363,16 @@ impl CodeEditor {
     /// How the cursor draws, a line unless set.
     pub fn cursor_shape(mut self, shape: CursorShape) -> Self {
         self.options.cursor = shape;
+        self
+    }
+
+    /// Hides insertion carets without changing focus, selection, copying or navigation.
+    pub fn show_caret(mut self, visible: bool) -> Self {
+        self.options.show_caret = visible;
+        if !visible {
+            self.caret_on = false;
+            self._blink = None;
+        }
         self
     }
 
@@ -449,6 +519,7 @@ impl CodeEditor {
         hints.retain(|hint| kept(text.is_char_boundary(hint.offset), "an inlay hint"));
         self.marks.hints = hints;
         self.marks.hints.sort_by_key(|hint| hint.offset);
+        self.extent = None;
         cx.notify();
     }
 
@@ -462,12 +533,14 @@ impl CodeEditor {
     pub fn set_ghost_text(&mut self, ghost: Option<GhostText>, cx: &mut Context<Self>) {
         let text = self.buffer.text();
         self.marks.ghost = ghost.filter(|ghost| kept(text.is_char_boundary(ghost.offset), "ghost text"));
+        self.extent = None;
         cx.notify();
     }
 
     /// Changes against the saved text.
     pub fn set_diff(&mut self, hunks: Vec<DiffHunk>, cx: &mut Context<Self>) {
         self.marks.hunks = hunks;
+        self.extent = None;
         cx.notify();
     }
 
@@ -540,11 +613,11 @@ impl CodeEditor {
 
     /// Shows the cursors now and restarts their blink; still under reduced motion.
     pub(crate) fn restart_blink(&mut self, cx: &mut Context<Self>) {
-        self.caret_on = true;
+        self.caret_on = self.options.show_caret;
         self.blink_epoch += 1;
         let epoch = self.blink_epoch;
         let still = cx.theme().reduced_motion;
-        self._blink = (!still && self.focused).then(|| {
+        self._blink = (self.options.show_caret && !still && self.focused).then(|| {
             cx.spawn(async move |editor, cx| {
                 loop {
                     cx.background_executor().timer(BLINK).await;

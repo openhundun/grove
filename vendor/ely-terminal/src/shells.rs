@@ -1,16 +1,26 @@
+use crate::buttons::ButtonVariant;
+use crate::buttons::IconButton;
+use crate::menus::Menu;
+use crate::menus::MenuItem;
+use crate::menus::SplitButton;
+use crate::primitives::Icon;
+use crate::primitives::IconName;
+use crate::theme::ActiveTheme;
+use crate::theme::ControlSize;
+use crate::theme::IconSize;
+use crate::theme::TextSize;
+use gpui::AnyElement;
+use gpui::App;
+use gpui::ElementId;
+use gpui::FontWeight;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::RenderOnce;
+use gpui::SharedString;
+use gpui::Styled;
+use gpui::Window;
+use gpui::div;
 use std::rc::Rc;
-
-use gpui::{
-    AnyElement, App, ElementId, FontWeight, IntoElement, ParentElement, RenderOnce, SharedString,
-    Styled, Window, div,
-};
-
-use crate::{
-    buttons::{ButtonVariant, IconButton},
-    menus::{Menu, MenuItem, SplitButton},
-    primitives::{Icon, IconName},
-    theme::{ActiveTheme, ControlSize, IconSize, TextSize},
-};
 
 /// A shell a terminal can start: its name and its program.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,25 +59,14 @@ impl ShellSelector {
     /// A selector under `id` over `shells`, the first the default. Panics on none.
     pub fn new(id: impl Into<ElementId>, shells: impl IntoIterator<Item = ShellChoice>) -> Self {
         let shells: Vec<ShellChoice> = shells.into_iter().collect();
-        assert!(
-            !shells.is_empty(),
-            "a shell selector offers at least one shell"
-        );
-        Self {
-            id: id.into(),
-            shells,
-            default: 0,
-            on_pick: None,
-        }
+        assert!(!shells.is_empty(), "a shell selector offers at least one shell");
+        Self { id: id.into(), shells, default: 0, on_pick: None }
     }
 
     /// The default shell, by place; one past the list is logged and left as it was.
     pub fn default_shell(mut self, default: usize) -> Self {
         if default >= self.shells.len() {
-            log::error!(
-                "shell selector: no shell {default} of {}; the default stays",
-                self.shells.len()
-            );
+            log::error!("shell selector: no shell {default} of {}; the default stays", self.shells.len());
             return self;
         }
         self.default = default;
@@ -83,22 +82,14 @@ impl ShellSelector {
 
 impl RenderOnce for ShellSelector {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let menu = self
-            .shells
-            .iter()
-            .enumerate()
-            .fold(Menu::new(), |menu, (ix, shell)| {
-                let pick = self.on_pick.clone();
-                menu.item(
-                    MenuItem::check(shell.name.clone(), ix == self.default).on_click(
-                        move |window, cx| {
-                            if let Some(pick) = &pick {
-                                pick(ix, window, cx)
-                            }
-                        },
-                    ),
-                )
-            });
+        let menu = self.shells.iter().enumerate().fold(Menu::new(), |menu, (ix, shell)| {
+            let pick = self.on_pick.clone();
+            menu.item(MenuItem::check(shell.name.clone(), ix == self.default).on_click(move |window, cx| {
+                if let Some(pick) = &pick {
+                    pick(ix, window, cx)
+                }
+            }))
+        });
         let (pick, default) = (self.on_pick, self.default);
         SplitButton::new(self.id, format!("New {}", self.shells[default].name), menu)
             .variant(ButtonVariant::Ghost)
@@ -132,18 +123,8 @@ pub struct TerminalToolbar {
 
 impl TerminalToolbar {
     /// `exit` is the program's exit code once it has ended.
-    pub fn new(
-        id: impl Into<ElementId>,
-        title: impl Into<SharedString>,
-        exit: Option<i32>,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            title: title.into(),
-            exit,
-            shells: None,
-            actions: Vec::new(),
-        }
+    pub fn new(id: impl Into<ElementId>, title: impl Into<SharedString>, exit: Option<i32>) -> Self {
+        Self { id: id.into(), title: title.into(), exit, shells: None, actions: Vec::new() }
     }
 
     /// The shell selector, at the right of the title.
@@ -152,13 +133,7 @@ impl TerminalToolbar {
         self
     }
 
-    fn action(
-        mut self,
-        key: &'static str,
-        icon: IconName,
-        words: &'static str,
-        run: impl Fn(&mut Window, &mut App) + 'static,
-    ) -> Self {
+    fn action(mut self, key: &'static str, icon: IconName, words: &'static str, run: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.actions.push((key, icon, words, Rc::new(run)));
         self
     }
@@ -203,19 +178,8 @@ impl RenderOnce for TerminalToolbar {
             .border_color(colors.border)
             .text_size(theme.text_size(TextSize::Sm))
             .child(Icon::new(mark).size(IconSize::Sm).color(color))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(colors.fg)
-                    .child(self.title),
-            )
-            .children(self.exit.filter(|code| *code != 0).map(|code| {
-                div()
-                    .text_color(colors.danger)
-                    .child(format!("Exit {code}"))
-            }))
+            .child(div().flex_1().min_w_0().font_weight(FontWeight::MEDIUM).text_color(colors.fg).child(self.title))
+            .children(self.exit.filter(|code| *code != 0).map(|code| div().text_color(colors.danger).child(format!("Exit {code}"))))
             .children(self.shells)
             .children(self.actions.into_iter().map(|(key, icon, words, run)| {
                 IconButton::new((self.id.clone(), key), icon)
@@ -229,17 +193,13 @@ impl RenderOnce for TerminalToolbar {
 
 #[cfg(test)]
 mod tests {
-    use super::{ShellChoice, ShellSelector};
+    use super::ShellChoice;
+    use super::ShellSelector;
 
     #[test]
     fn a_default_past_the_shells_keeps_the_one_before() {
-        let shell = |name: &'static str| ShellChoice {
-            name: name.into(),
-            program: name.into(),
-        };
-        let picker = ShellSelector::new("shells", [shell("zsh"), shell("bash")])
-            .default_shell(1)
-            .default_shell(5);
+        let shell = |name: &'static str| ShellChoice { name: name.into(), program: name.into() };
+        let picker = ShellSelector::new("shells", [shell("zsh"), shell("bash")]).default_shell(1).default_shell(5);
         assert_eq!(picker.default, 1);
     }
 }

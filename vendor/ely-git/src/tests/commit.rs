@@ -1,14 +1,23 @@
-use crate::{
-    i18n,
-    theme::{ActiveTheme, TextSize},
-};
-use gpui::{
-    AppContext, Context, Entity, Focusable, IntoElement, Modifiers, ParentElement, Render, Styled,
-    TestAppContext, VisualTestContext, Window, div, px,
-};
-
 use super::super::CommitInput;
-use crate::forms::{Checkbox, TextInput};
+use crate::forms::Checkbox;
+use crate::forms::TextInput;
+use crate::i18n;
+use crate::theme::ActiveTheme;
+use crate::theme::TextSize;
+use gpui::AppContext;
+use gpui::Context;
+use gpui::Entity;
+use gpui::Focusable;
+use gpui::IntoElement;
+use gpui::Modifiers;
+use gpui::ParentElement;
+use gpui::Render;
+use gpui::Styled;
+use gpui::TestAppContext;
+use gpui::VisualTestContext;
+use gpui::Window;
+use gpui::div;
+use gpui::px;
 
 struct Form {
     width: f32,
@@ -24,32 +33,20 @@ struct Form {
 impl Render for Form {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (flip, commit) = (cx.entity(), cx.entity());
-        let root = div()
-            .w(px(self.width))
-            .font_family(cx.theme().font_family.clone());
+        let root = div().w(px(self.width)).font_family(cx.theme().font_family.clone());
         if self.standalone {
-            return root.child(Checkbox::new("standalone", false).label(i18n::text(
-                cx,
-                "git.commit.amend",
-                &[],
-            )));
+            return root.child(Checkbox::new("standalone", false).label(i18n::text(cx, "git.commit.amend", &[])));
         }
         root.child(
-            CommitInput::new(
-                "test-commit",
-                &self.subject,
-                &self.body,
-                self.branch.clone(),
-                self.staged,
-            )
-            .amend(self.amend)
-            .on_amend(move |on, _, cx| {
-                flip.update(cx, |form, cx| {
-                    form.amend = on;
-                    cx.notify();
+            CommitInput::new("test-commit", &self.subject, &self.body, self.branch.clone(), self.staged)
+                .amend(self.amend)
+                .on_amend(move |on, _, cx| {
+                    flip.update(cx, |form, cx| {
+                        form.amend = on;
+                        cx.notify();
+                    })
                 })
-            })
-            .on_commit(move |_, cx| commit.update(cx, |form, _| form.committed += 1)),
+                .on_commit(move |_, cx| commit.update(cx, |form, _| form.committed += 1)),
         )
     }
 }
@@ -91,12 +88,7 @@ fn resizing_with_native_inter_font_keeps_amend_readable() {
             .expect("bundled fonts")
             .into_iter()
             .filter(|name| name.ends_with(".ttf"))
-            .map(|name| {
-                ely_core::Assets
-                    .load(&name)
-                    .expect("bundled font")
-                    .expect("listed font")
-            })
+            .map(|name| ely_core::Assets.load(&name).expect("bundled font").expect("listed font"))
             .collect();
         cx.text_system().add_fonts(fonts).expect("bundled fonts");
     });
@@ -109,16 +101,10 @@ fn check_resizing(cx: &mut TestAppContext) {
     settle(cx);
     let label_width = cx.update(|window, cx| {
         let text = i18n::text(cx, "git.commit.amend", &[]);
-        let size = cx
-            .theme()
-            .text_size(TextSize::Base)
-            .to_pixels(window.rem_size());
+        let size = cx.theme().text_size(TextSize::Base).to_pixels(window.rem_size());
         let mut run = window.text_style().to_run(text.len());
         run.font = gpui::font(cx.theme().font_family.clone());
-        window
-            .text_system()
-            .shape_line(text, size, &[run], None)
-            .width
+        window.text_system().shape_line(text, size, &[run], None).width
     });
     let branches = [
         "main".to_string(),
@@ -128,9 +114,7 @@ fn check_resizing(cx: &mut TestAppContext) {
     ];
     for branch in branches {
         for amend in [false, true] {
-            for width in [
-                960.0, 560.0, 320.0, 240.0, 160.0, 144.0, 143.0, 240.0, 960.0,
-            ] {
+            for width in [960.0, 560.0, 320.0, 240.0, 160.0, 144.0, 143.0, 240.0, 960.0] {
                 view.update(cx, |form, cx| {
                     form.width = width;
                     form.standalone = true;
@@ -149,40 +133,25 @@ fn check_resizing(cx: &mut TestAppContext) {
                 let amend = cx.debug_bounds("commit-amend").expect("amend control");
                 let current = cx.debug_bounds("checkbox-label").expect("amend label");
                 let button = cx.debug_bounds("commit-button").expect("commit button");
-                assert_eq!(
-                    current.size.height, reference.size.height,
-                    "{branch} at {width}"
-                );
-                assert!(
-                    current.size.width >= label_width.min(reference.size.width),
-                    "{current:?} at {width}"
-                );
+                assert_eq!(current.size.height, reference.size.height, "{branch} at {width}");
+                assert!(current.size.width >= label_width.min(reference.size.width), "{current:?} at {width}");
                 for bounds in [amend, current, button] {
                     assert!(bounds.left() >= footer.left(), "{bounds:?}");
                     assert!(bounds.right() <= footer.right(), "{bounds:?} at {width}");
                 }
                 if branch == "main" && width >= 320.0 {
-                    assert!(
-                        button.top() < amend.bottom(),
-                        "short controls should share a row"
-                    );
+                    assert!(button.top() < amend.bottom(), "short controls should share a row");
                 }
                 if width <= 240.0 && branch.len() > 50 {
                     assert!(button.top() >= amend.bottom(), "long branch should wrap");
                 }
                 if button.top() < amend.bottom() {
-                    assert!(
-                        button.left() >= amend.right(),
-                        "{amend:?} overlaps {button:?}"
-                    );
+                    assert!(button.left() >= amend.right(), "{amend:?} overlaps {button:?}");
                 } else {
                     assert_eq!(button.left(), footer.left());
                     assert_eq!(button.right(), footer.right());
                 }
-                assert!(
-                    footer.size.height <= reference.size.height + button.size.height + px(8.0),
-                    "{footer:?} at {width}"
-                );
+                assert!(footer.size.height <= reference.size.height + button.size.height + px(8.0), "{footer:?} at {width}");
             }
         }
     }
@@ -219,11 +188,7 @@ fn amend_and_commit_keep_their_click_and_submit_behavior(cx: &mut TestAppContext
     cx.simulate_keystrokes("enter");
     settle(cx);
     assert_eq!(view.read_with(cx, |form, _| form.committed), 1);
-    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
-        "cmd-enter"
-    } else {
-        "ctrl-enter"
-    });
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") { "cmd-enter" } else { "ctrl-enter" });
     settle(cx);
     assert_eq!(view.read_with(cx, |form, _| form.committed), 2);
     subject.update(cx, |input, cx| input.set_text("", cx));

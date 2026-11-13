@@ -14,7 +14,9 @@ use gpui_kit::*;
 use ui::ChangesMode;
 use ui::FilesMode;
 use ui::Grove;
+use ui::HistoryMode;
 use ui::TerminalMode;
+use ui::ToggleDock;
 
 actions!(grove, [Quit]);
 
@@ -33,14 +35,20 @@ fn main() {
         ely_terminal::bind_keys(cx);
         configure_ely(cx);
         Theme::change(ThemeMode::Light, None, cx);
-        Theme::global_mut(cx).mono_font_family = grove_platform::MONO_FONT.into();
-        Theme::global_mut(cx).mono_font_size = px(11.5);
+        Theme::update(cx, |theme| {
+            theme.font_family = grove_platform::SYSTEM_FONT.into();
+            theme.font_size = px(12.);
+            theme.mono_font_family = "Maple Mono NF CN".into();
+            theme.mono_font_size = px(10.);
+        });
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.bind_keys([
             KeyBinding::new(grove_platform::QUIT_KEY, Quit, None),
             KeyBinding::new(grove_platform::MODE_KEY_LIST[0], ChangesMode, Some("Grove")),
             KeyBinding::new(grove_platform::MODE_KEY_LIST[1], FilesMode, Some("Grove")),
             KeyBinding::new(grove_platform::MODE_KEY_LIST[2], TerminalMode, Some("Grove")),
+            KeyBinding::new(grove_platform::MODE_KEY_LIST[3], HistoryMode, Some("Grove")),
+            KeyBinding::new("cmd-j", ToggleDock, Some("Grove")),
             KeyBinding::new("ctrl-`", TerminalMode, Some("Grove")),
         ]);
         cx.on_window_closed(|cx, _| {
@@ -79,8 +87,8 @@ fn configure_ely(cx: &mut App) {
     ElyTheme::set_mode_now(Mode::Light, cx);
     let theme = cx.global_mut::<ElyTheme>();
     theme.font_family = grove_platform::SYSTEM_FONT.into();
-    theme.mono_family = grove_platform::MONO_FONT.into();
-    theme.font_scale = 0.96;
+    theme.mono_family = "Maple Mono NF CN".into();
+    theme.font_scale = 160. / (13. * 12.);
     theme.radius_scale = 0.5;
     theme.density = Density::Compact;
     theme.reduced_motion = true;

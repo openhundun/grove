@@ -1,196 +1,158 @@
 use super::*;
-use gpui_kit::component::text::TextViewStyle;
+use gpui_kit::component::scroll::Scrollbar;
+use gpui_kit::component::scroll::ScrollbarMode;
 
 impl Grove {
     pub(super) fn detail(&self, cx: &mut Context<Self>) -> AnyElement {
-        if self.state().mode == Mode::Terminal {
-            let key = self.view().session_key(self.state().session);
-            let session = self.view().session_map.get(&key);
-            let title = session.and_then(|session| session.terminal.as_ref()).map(|terminal| terminal.read(cx).title().clone());
-            let mut head = self
-                .chrome("Terminal")
-                .child(
-                    div()
-                        .text_color(rgb(MUTED))
-                        .text_size(px(10.))
-                        .when(title.is_some(), |this| this.font_family(self.settings.terminal_font.clone()))
-                        .child(title.unwrap_or_else(|| "Terminal".into())),
-                )
-                .child(div().flex_1())
-                .child(
-                    div()
-                        .truncate()
-                        .font_family(self.settings.terminal_font.clone())
-                        .text_size(px(9.))
-                        .child(key.cwd.to_string_lossy().into_owned()),
-                );
-            if let Some(session) = session.filter(|session| session.status(cx) != "PTY") {
-                let status = session.terminal.as_ref().and_then(|terminal| terminal.read(cx).exit_status());
-                let label = status.as_ref().map_or_else(|| "Start failed".to_owned(), |status| format!("{status}"));
-                head = head
-                    .child(
-                        div()
-                            .text_size(px(9.))
-                            .text_color(rgb(MUTED))
-                            .when(status.is_some(), |this| this.font_family(self.settings.terminal_font.clone()))
-                            .child(label),
-                    )
-                    .child(
-                        Button::new("restart-terminal")
-                            .label("Restart")
-                            .icon(IconName::RefreshCw)
-                            .ghost()
-                            .xsmall()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                let view = &mut this.workspace_list[this.active];
-                                view.session_map.remove(&key);
-                                view.terminal_focus = true;
-                                cx.notify();
-                            })),
-                    );
-            }
-            let body = if let Some(terminal) = session.and_then(|session| session.terminal.as_ref()) {
-                div().size_full().min_w_0().min_h_0().child(terminal.clone()).into_any_element()
-            } else {
-                self.notice(session.and_then(|session| session.error.clone()).unwrap_or_else(|| "Starting terminal…".into()))
-            };
-            return v_flex()
-                .size_full()
-                .child(head)
-                .child(div().flex_1().min_h_0().min_w_0().overflow_hidden().child(body))
-                .into_any_element();
+        let message = self.state().mode == Mode::Changes && self.state().file == FileSelection::Message;
+        let (title, refresh_id, refresh_label, refresh_target) = if message {
+            ("Message", "refresh-message", "Refresh commit message", RefreshTarget::History)
+        } else if self.state().mode == Mode::Files {
+            ("Preview", "refresh-preview", "Refresh file preview", RefreshTarget::File)
+        } else {
+            ("Diff", "refresh-diff", "Refresh diff", RefreshTarget::File)
+        };
+        if let Some(notice) = &self.view().error {
+            let head = self.chrome(title).child(div().flex_1()).child(self.refresh_button(refresh_id, refresh_label, refresh_target, cx));
+            return v_flex().size_full().child(head).child(self.notice(notice.clone())).into_any_element();
         }
-        if let Some(error) = &self.view().error {
-            return self.notice(error.clone());
-        }
-        if self.state().mode == Mode::Changes && self.state().file == FileSelection::Message {
-            let Some(history) = &self.view().history_data else {
-                return self.notice("Reading commit…");
-            };
+        if message {
             let preview = self.state().preview;
             let workspace = self.active;
-            let head = self.chrome("Message").child(div().flex_1()).child(
-                h_flex()
-                    .tab_group()
-                    .gap(px(2.))
-                    .child(
-                        Button::new("message-source")
-                            .icon(IconName::FileCode)
-                            .accessibility_label("Commit message source")
-                            .ghost()
-                            .xsmall()
-                            .selected(!preview)
-                            .toggled(!preview)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.workspace_list[workspace].state.preview = false;
-                                cx.notify();
-                            })),
+            let head = self
+                .chrome("Message")
+                .child(div().flex_1())
+                .child(
+                    // The same toolbar position represents the current source/preview mode.
+                    self.icon_button(
+                        "message-view",
+                        if preview { IconName::Eye } else { IconName::FileCode },
+                        if preview {
+                            "Commit message preview; switch to source"
+                        } else {
+                            "Commit message source; switch to preview"
+                        },
                     )
-                    .child(
-                        Button::new("message-preview")
-                            .icon(IconName::Eye)
-                            .accessibility_label("Commit message preview")
-                            .ghost()
-                            .xsmall()
-                            .selected(preview)
-                            .toggled(preview)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.workspace_list[workspace].state.preview = true;
-                                cx.notify();
-                            })),
-                    ),
-            );
+                    .toggled(preview)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.workspace_list[workspace].state.preview = !preview;
+                        cx.notify();
+                    })),
+                )
+                .child(self.refresh_button("refresh-message", "Refresh commit message", RefreshTarget::History, cx));
+            let Some(history) = &self.view().history_data else {
+                return v_flex().size_full().child(head).child(self.notice("Reading commit…")).into_any_element();
+            };
             let body = if preview {
-                let font_family = self.settings.editor_font.clone();
                 div()
                     .id("message-markdown")
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
                     .p(px(18.))
-                    .child(
-                        TextView::markdown("message", history.message.clone())
-                            .selectable(true)
-                            .font_family(font_family.clone())
-                            .inline_code_style(StyleRefinement::default().font_family(font_family.clone()))
-                            .style(TextViewStyle::default().code_block(StyleRefinement::default().font_family(font_family.clone()).pt(px(28.))))
-                            .code_block_actions(move |code, _, cx| {
-                                div()
-                                    .font_family(font_family.clone())
-                                    .text_size(gpui_kit::base::Theme::global(cx).tokens.typography.xs.size)
-                                    .line_height(px(16.))
-                                    .text_color(gpui_kit::component::ActiveTheme::theme(cx).muted_foreground)
-                                    .children(code.lang().filter(|lang| !lang.is_empty()))
-                            }),
-                    )
+                    .bg(rgb(0xffffff))
+                    .child(super::markdown_theme::render(history.message.clone(), &self.settings.preview))
                     .into_any_element()
             } else if let Some(editor) = &self.view().message_editor {
-                editor_view(editor).into_any_element()
+                editor_view(editor, cx).into_any_element()
             } else {
                 self.notice("Reading message…")
             };
             return v_flex().size_full().child(head).child(div().flex_1().min_h_0().overflow_hidden().child(body)).into_any_element();
         }
         let Some(file) = self.view().file_key.as_ref().and_then(|key| self.view().file_map.get(key)) else {
-            return self.notice(if self.view().loading { "Reading selected file…" } else { "Select a file to inspect" });
+            let head = self.chrome(title).child(div().flex_1()).child(self.refresh_button(refresh_id, refresh_label, refresh_target, cx));
+            return v_flex()
+                .size_full()
+                .child(head)
+                .child(self.notice(if self.view().loading { "Reading selected file…" } else { "Select a file to inspect" }))
+                .into_any_element();
         };
         if self.state().mode == Mode::Files {
-            let head = self.chrome("Preview").child(div().flex_1()).child(
-                div()
-                    .truncate()
-                    .font_family(self.settings.files_font.clone())
-                    .text_size(px(9.5))
-                    .child(file.data.path.to_string_lossy().into_owned()),
-            );
+            let head = self
+                .chrome("Preview")
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .refine_style(&self.settings.files.style())
+                        .child(file.data.path.to_string_lossy().into_owned()),
+                )
+                .child(self.refresh_button("refresh-preview", "Refresh file preview", RefreshTarget::File, cx));
             let body = file
                 .editor
                 .as_ref()
-                .map(|editor| editor_view(editor).into_any_element())
+                .map(|editor| editor_view(editor, cx).into_any_element())
                 .unwrap_or_else(|| self.notice(content_notice(&file.data.content)));
             return v_flex().size_full().child(head).child(div().flex_1().min_h_0().overflow_hidden().child(body)).into_any_element();
         }
         let split = self.state().split;
+        let full = self.state().diff_full;
+        let workspace_id = self.view().id;
+        let file_key = self.view().file_key.as_ref().unwrap().clone();
+        let owner = cx.entity().downgrade();
         let workspace = self.active;
-        let head = self.chrome("Diff").child(div().flex_1()).child(
-            h_flex()
-                .tab_group()
-                .gap(px(2.))
-                .child(
-                    Button::new("diff-unified")
-                        .icon(IconName::Rows2)
-                        .accessibility_label("Unified diff")
-                        .ghost()
-                        .xsmall()
-                        .selected(!split)
-                        .toggled(!split)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.workspace_list[workspace].state.split = false;
-                            cx.notify();
-                        })),
+        let head = self
+            .chrome("Diff")
+            .child(div().flex_1())
+            .child(
+                self.icon_button(
+                    "diff-layout",
+                    if split { IconName::Columns2 } else { IconName::Rows2 },
+                    if split {
+                        "Side-by-side diff; switch to unified diff"
+                    } else {
+                        "Unified diff; switch to side-by-side diff"
+                    },
                 )
-                .child(
-                    Button::new("diff-split")
-                        .icon(IconName::Columns2)
-                        .accessibility_label("Side-by-side diff")
-                        .ghost()
-                        .xsmall()
-                        .selected(split)
-                        .toggled(split)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.workspace_list[workspace].state.split = true;
-                            cx.notify();
-                        })),
-                ),
-        );
+                .toggled(split)
+                .on_click(cx.listener(move |this, _, _, cx| this.set_diff_layout(workspace, !split, cx))),
+            )
+            .child(
+                self.icon_button(
+                    "diff-context",
+                    if full { IconName::ChevronUp } else { IconName::ChevronDown },
+                    if full { "Full diff; collapse unchanged lines" } else { "Collapsed diff; expand unchanged lines" },
+                )
+                .toggled(full)
+                .on_click(cx.listener(move |this, _, _, cx| this.set_diff_context(workspace, !full, cx))),
+            )
+            .child(self.refresh_button("refresh-diff", "Refresh diff", RefreshTarget::File, cx));
         let body = file
             .diff
             .as_ref()
             .filter(|stretches| !stretches.is_empty())
             .map(|stretches| {
-                DiffViewer::from_stretches("file-diff", file.data.path.to_string_lossy().into_owned(), stretches.clone())
-                    .headless()
-                    .font_family(self.settings.editor_font.clone())
-                    .layout(if split { DiffLayout::Split } else { DiffLayout::Unified })
+                // Split links both axes across the two actual pane scroll handles; each pane owns its bars.
+                div()
+                    .relative()
+                    .size_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(
+                        DiffViewer::from_stretches("file-diff", file.data.path.to_string_lossy().into_owned(), stretches.clone())
+                            .headless()
+                            .open(
+                                stretches
+                                    .iter()
+                                    .enumerate()
+                                    .filter_map(|(index, stretch)| (matches!(stretch, Stretch::Folded(_)) && (full || file.diff_open.contains(&index))).then_some(index)),
+                            )
+                            .on_open(move |stretch, _, cx| {
+                                let _ = owner.update(cx, |this, cx| this.open_diff_context(workspace_id, &file_key, stretch, cx));
+                            })
+                            .font_family(self.settings.editor.font_family.clone())
+                            .font_size(self.settings.editor.font_size)
+                            .font_weight(FontWeight(f32::from(self.settings.editor.font_weight)))
+                            .line_height(self.settings.editor.line_height)
+                            .layout(if split { DiffLayout::Split } else { DiffLayout::Unified })
+                            .track_scroll(&file.diff_scroll)
+                            .scrollbars(|handle, _, _| Scrollbar::new(handle).id("file-diff-scrollbar").mode(ScrollbarMode::Always).into_any_element()),
+                    )
                     .into_any_element()
             })
             .unwrap_or_else(|| {
@@ -198,22 +160,47 @@ impl Grove {
                     self.notice(error.clone())
                 } else if let Some(patch) = &file.data.patch {
                     div()
+                        .id("patch-fallback")
+                        .size_full()
+                        .overflow_scroll()
+                        .whitespace_nowrap()
                         .p(px(16.))
-                        .text_size(px(11.))
                         .text_color(rgb(MUTED))
-                        .font_family(self.settings.editor_font.clone())
+                        .refine_style(&self.settings.editor.style())
                         .child(patch.to_string())
                         .into_any_element()
                 } else {
                     self.notice(content_notice(&file.data.content))
                 }
             });
-        v_flex().size_full().child(head).child(div().flex_1().min_h_0().overflow_hidden().child(body)).into_any_element()
+        v_flex()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
+            .child(head)
+            .children(file.data.notice.as_ref().filter(|_| file.diff.as_ref().is_some_and(|diff| !diff.is_empty())).map(|notice| {
+                div()
+                    .flex_shrink_0()
+                    .px(px(8.))
+                    .py(px(4.))
+                    .refine_style(&self.settings.secondary_ui_style())
+                    .text_color(rgb(MUTED))
+                    .child(notice.clone())
+            }))
+            .child(div().flex_1().min_w_0().min_h_0().overflow_hidden().child(body))
+            .into_any_element()
     }
 }
 
-fn editor_view(editor: &Entity<CodeEditor>) -> impl IntoElement {
-    div().size_full().min_w_0().min_h_0().child(editor.clone())
+fn editor_view(editor: &Entity<CodeEditor>, cx: &App) -> impl IntoElement {
+    let scroll_handle = editor.read(cx).scroll_handle();
+    div().relative().size_full().min_w_0().min_h_0().child(editor.clone()).child(
+        div()
+            .absolute()
+            .inset_0()
+            .child(Scrollbar::new(&scroll_handle).id(("editor-scrollbar", editor.entity_id())).mode(ScrollbarMode::Always)),
+    )
 }
 fn content_notice(content: &FileContent) -> String {
     match content {

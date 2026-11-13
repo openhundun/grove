@@ -1,43 +1,43 @@
 [package]
-name = "ely-terminal"
-version = "0.2.0"
-edition = "2024"
+categories   = ["gui"]
+description  = "Ely's terminal for GPUI: a grid, a pseudo-terminal, colored text and its search."
+edition      = "2024"
+homepage     = "https://elygpui.com"
+keywords     = ["gpui", "ui", "components", "widgets", "gui"]
+license      = "MIT"
+name         = "ely-terminal"
+repository   = "https://github.com/ELY-Open-Source/Ely-GPUI-Components"
 rust-version = "1.98"
-license = "MIT"
-description = "Ely's terminal for GPUI: a grid, a pseudo-terminal, colored text and its search."
-repository = "https://github.com/ELY-Open-Source/Ely-GPUI-Components"
-homepage = "https://elygpui.com"
-keywords = ["gpui", "ui", "components", "widgets", "gui"]
-categories = ["gui"]
+version      = "0.2.0"
 
 [package.metadata.upstream]
-patch = "Component font overrides and cell resize without restarting the program."
+patch    = "Per-grid family, pixel size, base weight and line-height builders plus live set_typography remeasure cells and resize the existing PTY without restarting its program; measurement uses the painted base face and ANSI bold adds relative weight while retaining colors and styles; explicit PTY shutdown supports workspace disposal."
 revision = "01a2135e99bb52fb817b7b62198dbdd24022bcf8"
 
 [features]
 test-support = ["ely-core/test-support", "gpui/test-support", "gpui/leak-detection"]
 
 [dependencies]
+anyhow   = "1"
 ely-core = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components.git", rev = "01a2135e99bb52fb817b7b62198dbdd24022bcf8", default-features = false }
-anyhow = "1"
-futures = "0.3"
-gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
-log = "0.4"
-regex = "1"
-vte = { version = "0.15", default-features = false, features = ["std", "ansi"] }
+futures  = "0.3"
+gpui     = { package = "gpui-pre", version = "=0.3.11", default-features = false }
+log      = "0.4"
+regex    = "1"
+vte      = { version = "0.15", default-features = false, features = ["std", "ansi"] }
 web-time = "1.1"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-ely-editor = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components.git", rev = "01a2135e99bb52fb817b7b62198dbdd24022bcf8" }
 alacritty_terminal = { version = "0.26", default-features = false }
+ely-editor         = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components.git", rev = "01a2135e99bb52fb817b7b62198dbdd24022bcf8" }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", default-features = false, features = ["std", "fs"] }
 
 [lints.rust]
-unreachable_pub = "warn"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+unreachable_pub = "warn"
 
 [lints.clippy]
-all = { level = "warn", priority = -1 }
+all                        = { level = "warn", priority = -1 }
 undocumented_unsafe_blocks = "warn"

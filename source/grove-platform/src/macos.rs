@@ -10,8 +10,8 @@ use std::process::Command;
 pub const SYSTEM_FONT: &str = ".AppleSystemUIFont";
 pub const MONO_FONT: &str = "Menlo";
 pub const QUIT_KEY: &str = "cmd-q";
-pub const MODE_KEY_LIST: [&str; 3] = ["cmd-1", "cmd-2", "cmd-3"];
-pub const MODE_LABEL_LIST: [&str; 3] = ["Changes and diff · ⌘1", "Files and preview · ⌘2", "Terminal sessions · ⌘3"];
+pub const MODE_KEY_LIST: [&str; 4] = ["cmd-1", "cmd-2", "cmd-3", "cmd-4"];
+pub const MODE_LABEL_LIST: [&str; 4] = ["Changes and diff · ⌘1", "Files and preview · ⌘2", "Terminal sessions · ⌘3", "Repositories and commits · ⌘4"];
 
 pub fn read_only_git_command(path: &Path) -> Command {
     let mut command = Command::new("/usr/bin/sandbox-exec");

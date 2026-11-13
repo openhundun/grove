@@ -1,15 +1,22 @@
+use crate::i18n;
+use crate::navigation::Group;
+use crate::navigation::Palette;
+use crate::navigation::Row;
+use crate::navigation::fuzzy;
+use crate::navigation::marked;
+use crate::navigation::query_field;
+use crate::primitives::IconName;
+use crate::theme::ActiveTheme;
+use gpui::App;
+use gpui::ElementId;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::RenderOnce;
+use gpui::SharedString;
+use gpui::Styled;
+use gpui::Window;
+use gpui::div;
 use std::rc::Rc;
-
-use gpui::{
-    App, ElementId, IntoElement, ParentElement, RenderOnce, SharedString, Styled, Window, div,
-};
-
-use crate::{
-    i18n,
-    navigation::{Group, Palette, Row, fuzzy, marked, query_field},
-    primitives::IconName,
-    theme::ActiveTheme,
-};
 
 /// A command run before: what, where, when, and how it ended when that is known.
 #[derive(Clone, Debug, PartialEq)]
@@ -54,24 +61,12 @@ pub struct CommandHistory {
 
 impl CommandHistory {
     /// `commands` newest first.
-    pub fn new(
-        id: impl Into<ElementId>,
-        commands: impl IntoIterator<Item = PastCommand>,
-        on_close: impl Fn(&mut Window, &mut App) + 'static,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            commands: commands.into_iter().collect(),
-            on_pick: None,
-            on_close: Rc::new(on_close),
-        }
+    pub fn new(id: impl Into<ElementId>, commands: impl IntoIterator<Item = PastCommand>, on_close: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        Self { id: id.into(), commands: commands.into_iter().collect(), on_pick: None, on_close: Rc::new(on_close) }
     }
 
     /// Runs with the command picked.
-    pub fn on_pick(
-        mut self,
-        handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_pick(mut self, handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static) -> Self {
         self.on_pick = Some(Rc::new(handler));
         self
     }
@@ -79,12 +74,7 @@ impl CommandHistory {
 
 impl RenderOnce for CommandHistory {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let input = query_field(
-            &self.id,
-            i18n::text(cx, "palette.history.placeholder", &[]),
-            window,
-            cx,
-        );
+        let input = query_field(&self.id, i18n::text(cx, "palette.history.placeholder", &[]), window, cx);
         let query = input.read(cx).text().trim().to_string();
         let colors = cx.theme().colors.clone();
         let mut found: Vec<(i32, Row)> = self
@@ -109,18 +99,8 @@ impl RenderOnce for CommandHistory {
                         name: past.command.clone(),
                         icon: Some(icon),
                         label: marked(past.command.clone(), hits, cx),
-                        detail: Some(
-                            div()
-                                .text_color(colors.fg_subtle)
-                                .child(past.cwd.clone())
-                                .into_any_element(),
-                        ),
-                        end: Some(
-                            div()
-                                .text_color(colors.fg_subtle)
-                                .child(past.when.clone())
-                                .into_any_element(),
-                        ),
+                        detail: Some(div().text_color(colors.fg_subtle).child(past.cwd.clone()).into_any_element()),
+                        end: Some(div().text_color(colors.fg_subtle).child(past.when.clone()).into_any_element()),
                     },
                 ))
             })
@@ -131,10 +111,7 @@ impl RenderOnce for CommandHistory {
         Palette {
             id: self.id,
             input,
-            groups: vec![Group {
-                title: None,
-                rows: found.into_iter().map(|(_, row)| row).collect(),
-            }],
+            groups: vec![Group { title: None, rows: found.into_iter().map(|(_, row)| row).collect() }],
             start: 0,
             empty: i18n::text(cx, "palette.history.empty", &[]),
             on_pick: self.on_pick,

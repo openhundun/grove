@@ -1,20 +1,42 @@
-use std::rc::Rc;
-
-use gpui::{
-    AnyElement, App, ElementId, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
-    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    prelude::*, relative,
-};
-
 use super::badges::DiffStat;
-use crate::{
-    buttons::{Button, ButtonVariant},
-    data_display::{Avatar, AvatarGroup, Tag, Tone},
-    forms::{Input, TextInput},
-    primitives::{Icon, IconName},
-    theme::{ActiveTheme, AvatarSize, ControlSize, IconSize, Palette, Radius, TextSize},
-    typography::{Ellipsis, LEADING, format},
-};
+use crate::buttons::Button;
+use crate::buttons::ButtonVariant;
+use crate::data_display::Avatar;
+use crate::data_display::AvatarGroup;
+use crate::data_display::Tag;
+use crate::data_display::Tone;
+use crate::forms::Input;
+use crate::forms::TextInput;
+use crate::primitives::Icon;
+use crate::primitives::IconName;
+use crate::theme::ActiveTheme;
+use crate::theme::AvatarSize;
+use crate::theme::ControlSize;
+use crate::theme::IconSize;
+use crate::theme::Palette;
+use crate::theme::Radius;
+use crate::theme::TextSize;
+use crate::typography::Ellipsis;
+use crate::typography::LEADING;
+use crate::typography::format;
+use gpui::AnyElement;
+use gpui::App;
+use gpui::ElementId;
+use gpui::Entity;
+use gpui::FontWeight;
+use gpui::Hsla;
+use gpui::InteractiveElement;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::RenderOnce;
+use gpui::SharedString;
+use gpui::StatefulInteractiveElement;
+use gpui::Styled;
+use gpui::Window;
+use gpui::div;
+use gpui::prelude::*;
+use gpui::relative;
+use std::rc::Rc;
 
 type Run = Rc<dyn Fn(&mut Window, &mut App)>;
 type OnBool = Rc<dyn Fn(bool, &mut Window, &mut App)>;
@@ -103,11 +125,7 @@ pub struct PullRequestCard {
 impl PullRequestCard {
     /// A card under `id` for `pull`.
     pub fn new(id: impl Into<ElementId>, pull: PullRequest) -> Self {
-        Self {
-            id: id.into(),
-            pull,
-            on_open: None,
-        }
+        Self { id: id.into(), pull, on_open: None }
     }
 
     /// Runs when the card is pressed.
@@ -135,9 +153,7 @@ impl RenderOnce for PullRequestCard {
             .map(|(count, word)| format!("{count} {word}"))
             .collect::<Vec<_>>()
             .join(" · ");
-        let branch = |name: SharedString, key: &str| {
-            Tag::new((self.id.clone(), key.to_string()), name).tone(Tone::Neutral)
-        };
+        let branch = |name: SharedString, key: &str| Tag::new((self.id.clone(), key.to_string()), name).tone(Tone::Neutral);
         let open = self.on_open;
         div()
             .id(self.id.clone())
@@ -156,51 +172,34 @@ impl RenderOnce for PullRequestCard {
                     .on_click(move |_, window, cx| open(window, cx))
             })
             .child(
-                div()
-                    .flex()
-                    .items_start()
-                    .gap_2()
-                    .child(Icon::new(icon).size(IconSize::Md).color(tint))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap_0p5()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_baseline()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(colors.fg)
-                                            .child(Ellipsis::new(pull.title)),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_none()
-                                            .text_color(colors.fg_subtle)
-                                            .child(format!("#{}", pull.number)),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1p5()
-                                    .text_color(colors.fg_muted)
-                                    .child(format!("{state} · {} wants to merge", pull.author))
-                                    .child(branch(pull.head, "head"))
-                                    .child("into")
-                                    .child(branch(pull.base, "base"))
-                                    .child(div().text_color(colors.fg_subtle).child(pull.when)),
-                            ),
-                    ),
+                div().flex().items_start().gap_2().child(Icon::new(icon).size(IconSize::Md).color(tint)).child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .flex()
+                                .items_baseline()
+                                .gap_2()
+                                .child(div().flex_1().min_w_0().font_weight(FontWeight::SEMIBOLD).text_color(colors.fg).child(Ellipsis::new(pull.title)))
+                                .child(div().flex_none().text_color(colors.fg_subtle).child(format!("#{}", pull.number))),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1p5()
+                                .text_color(colors.fg_muted)
+                                .child(format!("{state} · {} wants to merge", pull.author))
+                                .child(branch(pull.head, "head"))
+                                .child("into")
+                                .child(branch(pull.base, "base"))
+                                .child(div().text_color(colors.fg_subtle).child(pull.when)),
+                        ),
+                ),
             )
             .child(
                 div()
@@ -209,18 +208,14 @@ impl RenderOnce for PullRequestCard {
                     .gap_4()
                     .pl_6()
                     .text_color(colors.fg_muted)
+                    .child(div().flex().items_center().gap_1().child(Icon::new(check_icon).size(IconSize::Sm).color(check_tint)).child(checks))
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(Icon::new(check_icon).size(IconSize::Sm).color(check_tint))
-                            .child(checks),
-                    )
-                    .child(
-                        AvatarGroup::new(pull.reviewers.iter().enumerate().map(|(ix, name)| {
-                            Avatar::new((self.id.clone(), format!("reviewer-{ix}")), name.clone())
-                        }))
+                        AvatarGroup::new(
+                            pull.reviewers
+                                .iter()
+                                .enumerate()
+                                .map(|(ix, name)| Avatar::new((self.id.clone(), format!("reviewer-{ix}")), name.clone())),
+                        )
                         .size(AvatarSize::Xs),
                     )
                     .child(
@@ -228,11 +223,7 @@ impl RenderOnce for PullRequestCard {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .child(
-                                Icon::new(IconName::MessageSquare)
-                                    .size(IconSize::Sm)
-                                    .color(colors.fg_subtle),
-                            )
+                            .child(Icon::new(IconName::MessageSquare).size(IconSize::Sm).color(colors.fg_subtle))
                             .child(pull.comments.to_string()),
                     )
                     .child(div().flex_1())
@@ -281,14 +272,7 @@ pub struct ReviewComment {
 
 impl ReviewComment {
     /// `line` counts from one; `code` is its text.
-    pub fn new(
-        id: impl Into<ElementId>,
-        path: impl Into<SharedString>,
-        line: usize,
-        code: impl Into<SharedString>,
-        notes: impl IntoIterator<Item = ReviewNote>,
-        reply: &Entity<TextInput>,
-    ) -> Self {
+    pub fn new(id: impl Into<ElementId>, path: impl Into<SharedString>, line: usize, code: impl Into<SharedString>, notes: impl IntoIterator<Item = ReviewNote>, reply: &Entity<TextInput>) -> Self {
         Self {
             id: id.into(),
             path: path.into(),
@@ -333,10 +317,7 @@ impl RenderOnce for ReviewComment {
                 div()
                     .flex()
                     .gap_2()
-                    .child(
-                        Avatar::new((self.id.clone(), format!("note-{ix}")), note.author.clone())
-                            .size(AvatarSize::Sm),
-                    )
+                    .child(Avatar::new((self.id.clone(), format!("note-{ix}")), note.author.clone()).size(AvatarSize::Sm))
                     .child(
                         div()
                             .flex_1()
@@ -348,15 +329,8 @@ impl RenderOnce for ReviewComment {
                                 div()
                                     .flex()
                                     .gap_2()
-                                    .child(
-                                        div()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(colors.fg)
-                                            .child(note.author.clone()),
-                                    )
-                                    .child(
-                                        div().text_color(colors.fg_subtle).child(note.when.clone()),
-                                    ),
+                                    .child(div().font_weight(FontWeight::MEDIUM).text_color(colors.fg).child(note.author.clone()))
+                                    .child(div().text_color(colors.fg_subtle).child(note.when.clone())),
                             )
                             .child(div().text_color(colors.fg).child(note.body.clone())),
                     )
@@ -382,27 +356,10 @@ impl RenderOnce for ReviewComment {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(
-                        Icon::new(IconName::MessageSquare)
-                            .size(IconSize::Sm)
-                            .color(colors.fg_muted),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_color(colors.fg_muted)
-                            .child(format!("{} line {}", self.path, self.line)),
-                    )
-                    .when(resolved, |header| {
-                        header.child(
-                            Tag::new((self.id.clone(), "resolved"), "Resolved").tone(Tone::Success),
-                        )
-                    })
-                    .child(format::plural(
-                        self.notes.len() as u64,
-                        "comment",
-                        "comments",
-                    )),
+                    .child(Icon::new(IconName::MessageSquare).size(IconSize::Sm).color(colors.fg_muted))
+                    .child(div().flex_1().text_color(colors.fg_muted).child(format!("{} line {}", self.path, self.line)))
+                    .when(resolved, |header| header.child(Tag::new((self.id.clone(), "resolved"), "Resolved").tone(Tone::Success)))
+                    .child(format::plural(self.notes.len() as u64, "comment", "comments")),
             )
             .child(
                 div()
@@ -420,35 +377,20 @@ impl RenderOnce for ReviewComment {
             .children(notes)
             .when(!resolved, |thread| {
                 thread.child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .child(div().flex_1().child(Input::new(&self.reply)))
-                        .child(
-                            Button::new((self.id.clone(), "reply"), "Reply")
-                                .variant(ButtonVariant::Primary)
-                                .size(ControlSize::Sm)
-                                .when_some(reply, |button, reply| {
-                                    button.on_click(move |_, window, cx| reply(window, cx))
-                                }),
-                        ),
+                    div().flex().gap_2().child(div().flex_1().child(Input::new(&self.reply))).child(
+                        Button::new((self.id.clone(), "reply"), "Reply")
+                            .variant(ButtonVariant::Primary)
+                            .size(ControlSize::Sm)
+                            .when_some(reply, |button, reply| button.on_click(move |_, window, cx| reply(window, cx))),
+                    ),
                 )
             })
             .child(
                 div().flex().child(
-                    Button::new(
-                        (self.id.clone(), "resolve"),
-                        if resolved {
-                            "Reopen conversation"
-                        } else {
-                            "Resolve conversation"
-                        },
-                    )
-                    .variant(ButtonVariant::Ghost)
-                    .size(ControlSize::Sm)
-                    .when_some(resolve, |button, resolve| {
-                        button.on_click(move |_, window, cx| resolve(!resolved, window, cx))
-                    }),
+                    Button::new((self.id.clone(), "resolve"), if resolved { "Reopen conversation" } else { "Resolve conversation" })
+                        .variant(ButtonVariant::Ghost)
+                        .size(ControlSize::Sm)
+                        .when_some(resolve, |button, resolve| button.on_click(move |_, window, cx| resolve(!resolved, window, cx))),
                 ),
             )
     }

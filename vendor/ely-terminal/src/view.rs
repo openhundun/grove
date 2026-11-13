@@ -1,34 +1,57 @@
-use std::{borrow::Cow, process::ExitStatus, rc::Rc, sync::Arc};
-
-use alacritty_terminal::{
-    event::{Event, Notify, OnResize},
-    event_loop::Notifier,
-    grid::Scroll,
-    sync::FairMutex,
-    term::{Term, test::TermSize},
-    vte::ansi::{ClearMode, Handler, Processor},
-};
+use super::colors::Ink;
+use super::frame::Frame;
+use super::frame::frame;
+use super::input;
+use super::links::Target;
+use super::paint;
+use super::pty::Launch;
+use super::pty::Listener;
+use super::pty::Session;
+use super::pty::{self};
+use super::search::Search;
+use crate::motion;
+use crate::theme::ActiveTheme;
+use crate::theme::TextSize;
+use alacritty_terminal::event::Event;
+use alacritty_terminal::event::Notify;
+use alacritty_terminal::event::OnResize;
+use alacritty_terminal::event_loop::Notifier;
+use alacritty_terminal::grid::Scroll;
+use alacritty_terminal::sync::FairMutex;
+use alacritty_terminal::term::Term;
+use alacritty_terminal::term::test::TermSize;
+use alacritty_terminal::vte::ansi::ClearMode;
+use alacritty_terminal::vte::ansi::Handler;
+use alacritty_terminal::vte::ansi::Processor;
 use futures::StreamExt;
-use gpui::{
-    App, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement,
-    Pixels, Point, Render, Role, SharedString, Size, Styled, Task, Window, div, font, prelude::*,
-    size,
-};
+use gpui::App;
+use gpui::ClipboardItem;
+use gpui::Context;
+use gpui::EventEmitter;
+use gpui::FocusHandle;
+use gpui::Focusable;
+use gpui::FontWeight;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::Pixels;
+use gpui::Point;
+use gpui::Render;
+use gpui::Role;
+use gpui::SharedString;
+use gpui::Size;
+use gpui::Styled;
+use gpui::Task;
+use gpui::Window;
+use gpui::div;
+use gpui::font;
+use gpui::prelude::*;
+use gpui::px;
+use gpui::size;
+use std::borrow::Cow;
+use std::process::ExitStatus;
+use std::rc::Rc;
+use std::sync::Arc;
 use web_time::Instant;
-
-use super::{
-    colors::Ink,
-    frame::{Frame, frame},
-    input,
-    links::Target,
-    paint,
-    pty::{self, Launch, Listener, Session},
-    search::Search,
-};
-use crate::{
-    motion,
-    theme::{ActiveTheme, TextSize},
-};
 
 /// Line height over the text size.
 const LEADING: f32 = 1.35;
@@ -72,6 +95,9 @@ pub struct Terminal {
     title: SharedString,
     exited: Option<ExitStatus>,
     font_family: Option<SharedString>,
+    font_size: Option<f32>,
+    font_weight: FontWeight,
+    line_height: f32,
     /// Columns and lines.
     pub(crate) size: (usize, usize),
     pub(crate) cell: Size<Pixels>,
@@ -118,27 +144,15 @@ impl Terminal {
         Self::new(session, (columns, lines), "Output".into(), cx)
     }
 
-    fn new(
-        session: Session,
-        size: (usize, usize),
-        title: SharedString,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let Session {
-            term,
-            pty,
-            mut events,
-        } = session;
+    fn new(session: Session, size: (usize, usize), title: SharedString, cx: &mut Context<Self>) -> Self {
+        let Session { term, pty, mut events } = session;
         let task = cx.spawn(async move |this, cx| {
             while let Some(first) = events.next().await {
                 let mut batch = vec![first];
                 while let Ok(more) = events.try_recv() {
                     batch.push(more);
                 }
-                if this
-                    .update(cx, |terminal, cx| terminal.handle(batch, cx))
-                    .is_err()
-                {
+                if this.update(cx, |terminal, cx| terminal.handle(batch, cx)).is_err() {
                     break;
                 }
             }
@@ -150,6 +164,9 @@ impl Terminal {
             title,
             exited: None,
             font_family: None,
+            font_size: None,
+            font_weight: FontWeight::NORMAL,
+            line_height: LEADING,
             size,
             cell: size_of_cell(),
             resize_pending: true,
@@ -171,6 +188,27 @@ impl Terminal {
         self
     }
 
+    /// Grid text size in pixels; otherwise the theme's small text size.
+    pub fn font_size(mut self, size: f32) -> Self {
+        self.font_size = Some(size);
+        self.resize_pending = true;
+        self
+    }
+
+    /// The base cell weight; ANSI bold adds weight relative to this face.
+    pub fn font_weight(mut self, weight: FontWeight) -> Self {
+        self.font_weight = weight;
+        self.resize_pending = true;
+        self
+    }
+
+    /// Cell height as a multiple of the text size; defaults to 1.35.
+    pub fn line_height(mut self, multiplier: f32) -> Self {
+        self.line_height = multiplier;
+        self.resize_pending = true;
+        self
+    }
+
     /// Changes only this grid's font and refits the running program on the next paint.
     pub fn set_font_family(&mut self, family: impl Into<SharedString>, cx: &mut Context<Self>) {
         let family = family.into();
@@ -178,6 +216,19 @@ impl Terminal {
             return;
         }
         self.font_family = Some(family);
+        self.resize_pending = true;
+        cx.notify();
+    }
+
+    /// Refits the running grid on the next paint without restarting its PTY or replacing its text.
+    pub fn set_typography(&mut self, family: SharedString, size: f32, weight: FontWeight, line_height: f32, cx: &mut Context<Self>) {
+        if self.font_family.as_ref() == Some(&family) && self.font_size == Some(size) && self.font_weight == weight && self.line_height == line_height {
+            return;
+        }
+        self.font_family = Some(family);
+        self.font_size = Some(size);
+        self.font_weight = weight;
+        self.line_height = line_height;
         self.resize_pending = true;
         cx.notify();
     }
@@ -190,6 +241,16 @@ impl Terminal {
     /// How the program ended, once it has.
     pub fn exit_status(&self) -> Option<ExitStatus> {
         self.exited
+    }
+
+    /// Releases this grid's PTY even while a rendered frame still holds the terminal entity.
+    /// The reader's shutdown drops the platform PTY, which stops and reaps its child program.
+    pub fn shutdown(&mut self) {
+        if let Some(pty) = self.pty.take()
+            && pty.0.send(alacritty_terminal::event_loop::Msg::Shutdown).is_err()
+        {
+            log::debug!("terminal: the program had already ended");
+        }
     }
 
     /// The screen's text as it shows now, trailing spaces gone.
@@ -238,10 +299,7 @@ impl Terminal {
             self.term.lock().resize(TermSize::new(size.0, size.1));
         }
         self.resize_pending = false;
-        let cell = (
-            f32::from(self.cell.width).round() as u16,
-            f32::from(self.cell.height).round() as u16,
-        );
+        let cell = (f32::from(self.cell.width).round() as u16, f32::from(self.cell.height).round() as u16);
         if let Some(pty) = &mut self.pty {
             pty.on_resize(pty::window_size(&TermSize::new(size.0, size.1), cell));
         }
@@ -249,9 +307,7 @@ impl Terminal {
     }
 
     fn handle(&mut self, events: Vec<Event>, cx: &mut Context<Self>) {
-        let drawn = events
-            .iter()
-            .any(|event| !matches!(event, Event::MouseCursorDirty | Event::CursorBlinkingChange));
+        let drawn = events.iter().any(|event| !matches!(event, Event::MouseCursorDirty | Event::CursorBlinkingChange));
         for event in events {
             match event {
                 Event::Wakeup | Event::MouseCursorDirty | Event::CursorBlinkingChange => {}
@@ -267,14 +323,9 @@ impl Terminal {
                     self.bell = Some(Instant::now());
                     cx.emit(TerminalEvent::Bell);
                 }
-                Event::ClipboardStore(_, text) => {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text))
-                }
+                Event::ClipboardStore(_, text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
                 Event::ClipboardLoad(_, reply) => {
-                    let text = cx
-                        .read_from_clipboard()
-                        .and_then(|item| item.text())
-                        .unwrap_or_default();
+                    let text = cx.read_from_clipboard().and_then(|item| item.text()).unwrap_or_default();
                     self.write(reply(&text).into_bytes());
                 }
                 Event::ColorRequest(index, reply) => {
@@ -283,10 +334,7 @@ impl Terminal {
                     self.write(reply(rgb).into_bytes());
                 }
                 Event::TextAreaSizeRequest(reply) => {
-                    let cell = (
-                        f32::from(self.cell.width).round() as u16,
-                        f32::from(self.cell.height).round() as u16,
-                    );
+                    let cell = (f32::from(self.cell.width).round() as u16, f32::from(self.cell.height).round() as u16);
                     let size = TermSize::new(self.size.0, self.size.1);
                     self.write(reply(pty::window_size(&size, cell)).into_bytes());
                 }
@@ -312,14 +360,7 @@ fn size_of_cell() -> Size<Pixels> {
 
 impl Drop for Terminal {
     fn drop(&mut self) {
-        if let Some(pty) = &self.pty
-            && pty
-                .0
-                .send(alacritty_terminal::event_loop::Msg::Shutdown)
-                .is_err()
-        {
-            log::debug!("terminal: the program had already ended");
-        }
+        self.shutdown();
     }
 }
 
@@ -327,10 +368,10 @@ impl Render for Terminal {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let ink = Ink::new(&theme.colors);
-        let text = theme.text_size(TextSize::Sm);
+        let pixels = self.font_size.map(px).unwrap_or_else(|| theme.text_size(TextSize::Sm).to_pixels(window.rem_size()));
         let family = self.font_family.clone().unwrap_or_else(|| theme.mono_family.clone());
-        let mono = font(family);
-        let pixels = text.to_pixels(window.rem_size());
+        let mut mono = font(family);
+        mono.weight = self.font_weight;
         let resolved = window.text_system().resolve_font(&mono);
         let advance = match window.text_system().advance(resolved, pixels, 'm') {
             Ok(advance) => advance.width,
@@ -339,7 +380,7 @@ impl Render for Terminal {
                 pixels * 0.6
             }
         };
-        let cell = size(advance, (pixels * LEADING).round());
+        let cell = size(advance, (pixels * self.line_height).round());
         self.resize_pending |= self.cell != cell;
         self.cell = cell;
         let (found, current) = self.search.visible();
@@ -375,16 +416,9 @@ impl Render for Terminal {
             .size_full()
             .p_2()
             .bg(ink.bg)
-            .when_some(flash, |root, left| {
-                root.bg(ink.bg.blend(colors.warning.opacity(0.12 * left)))
-            })
+            .when_some(flash, |root, left| root.bg(ink.bg.blend(colors.warning.opacity(0.12 * left))))
             .when(self.hovered.is_some(), |root| root.cursor_pointer())
-            .child(paint::grid(
-                cx.entity(),
-                self.shown.clone(),
-                self.hovered.clone(),
-                look,
-            ));
+            .child(paint::grid(cx.entity(), self.shown.clone(), self.hovered.clone(), look));
         input::listen(root, cx)
     }
 }

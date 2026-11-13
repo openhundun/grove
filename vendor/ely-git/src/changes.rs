@@ -1,20 +1,38 @@
-use std::rc::Rc;
-
-use gpui::{
-    AnyElement, App, ElementId, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::*,
-};
-
 use super::badges::GitStatusBadge;
-use crate::{
-    buttons::{Button, ButtonVariant, IconButton},
-    forms::{Checkbox, Input, Submit, TextInput},
-    i18n,
-    lists::GitStatus,
-    primitives::{FocusRing, IconName},
-    theme::{ActiveTheme, ControlSize, Radius, TextSize},
-    typography::{Ellipsis, tabular},
-};
+use crate::buttons::Button;
+use crate::buttons::ButtonVariant;
+use crate::buttons::IconButton;
+use crate::forms::Checkbox;
+use crate::forms::Input;
+use crate::forms::Submit;
+use crate::forms::TextInput;
+use crate::i18n;
+use crate::lists::GitStatus;
+use crate::primitives::FocusRing;
+use crate::primitives::IconName;
+use crate::theme::ActiveTheme;
+use crate::theme::ControlSize;
+use crate::theme::Radius;
+use crate::theme::TextSize;
+use crate::typography::Ellipsis;
+use crate::typography::tabular;
+use gpui::AnyElement;
+use gpui::App;
+use gpui::ElementId;
+use gpui::Entity;
+use gpui::FontWeight;
+use gpui::InteractiveElement;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::RenderOnce;
+use gpui::Role;
+use gpui::SharedString;
+use gpui::StatefulInteractiveElement;
+use gpui::Styled;
+use gpui::Window;
+use gpui::div;
+use gpui::prelude::*;
+use std::rc::Rc;
 
 /// A changed file: path, status, and lines changed.
 #[derive(Clone, Debug, PartialEq)]
@@ -98,11 +116,7 @@ pub struct ChangesList {
 
 impl ChangesList {
     /// A list under `id` of `staged` and `unstaged` files.
-    pub fn new(
-        id: impl Into<ElementId>,
-        staged: impl IntoIterator<Item = Changed>,
-        unstaged: impl IntoIterator<Item = Changed>,
-    ) -> Self {
+    pub fn new(id: impl Into<ElementId>, staged: impl IntoIterator<Item = Changed>, unstaged: impl IntoIterator<Item = Changed>) -> Self {
         Self {
             id: id.into(),
             conflicted: Vec::new(),
@@ -141,10 +155,7 @@ impl ChangesList {
     }
 
     /// Runs with a file's path, its section and the action asked for.
-    pub fn on_action(
-        mut self,
-        handler: impl Fn(&SharedString, ChangeSection, ChangeAction, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_action(mut self, handler: impl Fn(&SharedString, ChangeSection, ChangeAction, &mut Window, &mut App) + 'static) -> Self {
         self.on_action = Some(Rc::new(handler));
         self
     }
@@ -168,25 +179,19 @@ impl ChangesList {
         let action = |key: &str, icon, words: &str, act: ChangeAction| {
             let words = i18n::text(cx, words, &[]);
             let (on_action, path) = (self.on_action.clone(), file.path.clone());
-            IconButton::new(
-                (self.id.clone(), format!("{key}-{section:?}-{}", file.path)),
-                icon,
-            )
-            .variant(ButtonVariant::Ghost)
-            .size(ControlSize::Sm)
-            .tooltip(words)
-            .when_some(on_action, |button, on_action| {
-                button.on_click(move |_, window, cx| {
-                    cx.stop_propagation();
-                    on_action(&path, section, act, window, cx)
+            IconButton::new((self.id.clone(), format!("{key}-{section:?}-{}", file.path)), icon)
+                .variant(ButtonVariant::Ghost)
+                .size(ControlSize::Sm)
+                .tooltip(words)
+                .when_some(on_action, |button, on_action| {
+                    button.on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        on_action(&path, section, act, window, cx)
+                    })
                 })
-            })
         };
         let (open, path) = (self.on_action.clone(), file.path.clone());
-        let picked = self
-            .selected
-            .as_ref()
-            .is_some_and(|(at, chosen)| *at == section && *chosen == file.path);
+        let picked = self.selected.as_ref().is_some_and(|(at, chosen)| *at == section && *chosen == file.path);
         div()
             .id((self.id.clone(), format!("row-{section:?}-{}", file.path)))
             .group(group.clone())
@@ -206,15 +211,8 @@ impl ChangesList {
             .rounded(theme.radius(Radius::Sm))
             .cursor_pointer()
             .hover(|row| row.bg(colors.hover))
-            .when_some(open, |row, open| {
-                row.on_click(move |_, window, cx| {
-                    open(&path, section, ChangeAction::Open, window, cx)
-                })
-            })
-            .child(GitStatusBadge::new(
-                (self.id.clone(), format!("status-{section:?}-{}", file.path)),
-                file.status,
-            ))
+            .when_some(open, |row, open| row.on_click(move |_, window, cx| open(&path, section, ChangeAction::Open, window, cx)))
+            .child(GitStatusBadge::new((self.id.clone(), format!("status-{section:?}-{}", file.path)), file.status))
             .child(
                 div()
                     .flex_1()
@@ -230,18 +228,10 @@ impl ChangesList {
                                 let path = file.path.clone();
                                 move || format!("change-name-{path}")
                             })
-                            .when(file.status == GitStatus::Deleted, |name| {
-                                name.line_through()
-                            })
+                            .when(file.status == GitStatus::Deleted, |name| name.line_through())
                             .child(Ellipsis::new(name)),
                     )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_color(colors.fg_subtle)
-                            .child(Ellipsis::new(folder)),
-                    ),
+                    .child(div().flex_1().min_w_0().text_color(colors.fg_subtle).child(Ellipsis::new(folder))),
             )
             .child(
                 div()
@@ -251,47 +241,21 @@ impl ChangesList {
                         let path = file.path.clone();
                         move || format!("change-actions-{path}")
                     })
-                    .child(action(
-                        "open",
-                        IconName::FileText,
-                        "git.changes.open",
-                        ChangeAction::Open,
-                    ))
-                    .when(
-                        matches!(section, ChangeSection::Unstaged | ChangeSection::Untracked),
-                        |actions| {
-                            actions.child(action(
-                                "discard",
-                                IconName::RotateCcw,
-                                "git.changes.discard",
-                                ChangeAction::Discard,
-                            ))
-                        },
-                    )
-                    .when(section == ChangeSection::Staged, |actions| {
-                        actions.child(action(
-                            "unstage",
-                            IconName::Minus,
-                            "git.changes.unstage",
-                            ChangeAction::Unstage,
-                        ))
+                    .child(action("open", IconName::FileText, "git.changes.open", ChangeAction::Open))
+                    .when(matches!(section, ChangeSection::Unstaged | ChangeSection::Untracked), |actions| {
+                        actions.child(action("discard", IconName::RotateCcw, "git.changes.discard", ChangeAction::Discard))
                     })
-                    .when(
-                        matches!(section, ChangeSection::Unstaged | ChangeSection::Untracked),
-                        |actions| {
-                            actions.child(action(
-                                "stage",
-                                IconName::Plus,
-                                "git.changes.stage",
-                                ChangeAction::Stage,
-                            ))
-                        },
-                    ),
+                    .when(section == ChangeSection::Staged, |actions| {
+                        actions.child(action("unstage", IconName::Minus, "git.changes.unstage", ChangeAction::Unstage))
+                    })
+                    .when(matches!(section, ChangeSection::Unstaged | ChangeSection::Untracked), |actions| {
+                        actions.child(action("stage", IconName::Plus, "git.changes.stage", ChangeAction::Stage))
+                    }),
             )
-            .children(file.lines.map(|(added, removed)| {
-                tabular(div().flex_none().text_color(colors.fg_subtle))
-                    .child(format!("+{added} −{removed}"))
-            }))
+            .children(
+                file.lines
+                    .map(|(added, removed)| tabular(div().flex_none().text_color(colors.fg_subtle)).child(format!("+{added} −{removed}"))),
+            )
             .into_any_element()
     }
 
@@ -313,9 +277,7 @@ impl ChangesList {
                 .variant(ButtonVariant::Ghost)
                 .size(ControlSize::Sm)
                 .tooltip(i18n::text(cx, key, &[]))
-                .when_some(on_all, |button, on_all| {
-                    button.on_click(move |_, window, cx| on_all(stage, window, cx))
-                })
+                .when_some(on_all, |button, on_all| button.on_click(move |_, window, cx| on_all(stage, window, cx)))
         });
         Some(
             div()
@@ -330,12 +292,7 @@ impl ChangesList {
                         .py_1()
                         .text_size(theme.text_size(TextSize::Xs))
                         .text_color(colors.fg_muted)
-                        .child(
-                            div()
-                                .flex_1()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(i18n::text(cx, section.key(), &[])),
-                        )
+                        .child(div().flex_1().font_weight(FontWeight::MEDIUM).child(i18n::text(cx, section.key(), &[])))
                         .child(tabular(div()).child(files.len().to_string()))
                         .children(button),
                 )
@@ -355,12 +312,7 @@ impl RenderOnce for ChangesList {
             self.section(ChangeSection::Untracked, &self.untracked, cx),
             self.section(ChangeSection::Ignored, &self.ignored, cx),
         ];
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .text_size(theme.text_size(TextSize::Sm))
-            .children(sections.into_iter().flatten())
+        div().flex().flex_col().gap_2().text_size(theme.text_size(TextSize::Sm)).children(sections.into_iter().flatten())
     }
 }
 
@@ -394,13 +346,7 @@ pub struct CommitInput {
 
 impl CommitInput {
     /// A message under `id`: `subject` and `body` hold its text, committing `staged` files on `branch`.
-    pub fn new(
-        id: impl Into<ElementId>,
-        subject: &Entity<TextInput>,
-        body: &Entity<TextInput>,
-        branch: impl Into<SharedString>,
-        staged: usize,
-    ) -> Self {
+    pub fn new(id: impl Into<ElementId>, subject: &Entity<TextInput>, body: &Entity<TextInput>, branch: impl Into<SharedString>, staged: usize) -> Self {
         Self {
             id: id.into(),
             subject: subject.clone(),
@@ -450,11 +396,7 @@ impl RenderOnce for CommitInput {
         } else {
             i18n::text(cx, "git.commit.commit_to", &[("branch", &self.branch)])
         };
-        let amend = Checkbox::new((self.id.clone(), "amend"), self.amend).label(i18n::text(
-            cx,
-            "git.commit.amend",
-            &[],
-        ));
+        let amend = Checkbox::new((self.id.clone(), "amend"), self.amend).label(i18n::text(cx, "git.commit.amend", &[]));
         let amend = match self.on_amend {
             Some(on_amend) => amend.on_change(move |on, window, cx| on_amend(on, window, cx)),
             None => amend,
@@ -471,11 +413,7 @@ impl RenderOnce for CommitInput {
                     submit(window, cx)
                 }
             })
-            .child(
-                Input::new(&self.subject).suffix(
-                    tabular(div().text_color(count)).child(format!("{length}/{}", SUBJECT.0)),
-                ),
-            )
+            .child(Input::new(&self.subject).suffix(tabular(div().text_color(count)).child(format!("{length}/{}", SUBJECT.0))))
             .child(Input::new(&self.body))
             .child(
                 div()
@@ -484,31 +422,16 @@ impl RenderOnce for CommitInput {
                     .debug_selector(|| "commit-footer".into())
                     .items_center()
                     .gap_2()
+                    .child(div().debug_selector(|| "commit-amend".into()).flex_grow_1().flex_shrink_0().max_w_full().child(amend))
                     .child(
-                        div()
-                            .debug_selector(|| "commit-amend".into())
-                            .flex_grow_1()
-                            .flex_shrink_0()
-                            .max_w_full()
-                            .child(amend),
-                    )
-                    .child(
-                        div()
-                            .debug_selector(|| "commit-button".into())
-                            .flex()
-                            .flex_auto()
-                            .min_w_0()
-                            .max_w_full()
-                            .child(
-                                Button::new((self.id.clone(), "commit"), label)
-                                    .full_width()
-                                    .variant(ButtonVariant::Primary)
-                                    .size(ControlSize::Sm)
-                                    .disabled(!ready)
-                                    .when_some(commit, |button, commit| {
-                                        button.on_click(move |_, window, cx| commit(window, cx))
-                                    }),
-                            ),
+                        div().debug_selector(|| "commit-button".into()).flex().flex_auto().min_w_0().max_w_full().child(
+                            Button::new((self.id.clone(), "commit"), label)
+                                .full_width()
+                                .variant(ButtonVariant::Primary)
+                                .size(ControlSize::Sm)
+                                .disabled(!ready)
+                                .when_some(commit, |button, commit| button.on_click(move |_, window, cx| commit(window, cx))),
+                        ),
                     ),
             )
     }

@@ -1,17 +1,38 @@
-use std::{
-    borrow::Cow,
-    sync::{Arc, Mutex},
-};
-
-use gpui::{
-    Bounds, Context, DevicePixels, Font, FontId, FontMetrics, FontRun, GlyphId, Hsla, IntoElement,
-    LineLayout, NoopTextSystem, ParentElement, Pixels, PlatformTextSystem, Render,
-    RenderGlyphParams, Size, Styled, TestAppContext, TestDispatcher, TextRenderingMode, Window,
-    div, hsla, px,
-};
-
-use super::super::{DiffLayout, DiffViewer};
-use crate::theme::{ActiveTheme, Mode, Palette, Theme};
+use super::super::DiffLayout;
+use super::super::DiffViewer;
+use crate::theme::ActiveTheme;
+use crate::theme::Mode;
+use crate::theme::Palette;
+use crate::theme::Theme;
+use gpui::Bounds;
+use gpui::Context;
+use gpui::DevicePixels;
+use gpui::Font;
+use gpui::FontId;
+use gpui::FontMetrics;
+use gpui::FontRun;
+use gpui::GlyphId;
+use gpui::Hsla;
+use gpui::IntoElement;
+use gpui::LineLayout;
+use gpui::NoopTextSystem;
+use gpui::ParentElement;
+use gpui::Pixels;
+use gpui::PlatformTextSystem;
+use gpui::Render;
+use gpui::RenderGlyphParams;
+use gpui::Size;
+use gpui::Styled;
+use gpui::TestAppContext;
+use gpui::TestDispatcher;
+use gpui::TextRenderingMode;
+use gpui::Window;
+use gpui::div;
+use gpui::hsla;
+use gpui::px;
+use std::borrow::Cow;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 /// Gpui's test text, keeping each drawn glyph's color.
 #[derive(Default)]
@@ -46,18 +67,11 @@ impl PlatformTextSystem for Painted {
         NoopTextSystem.glyph_for_char(font_id, ch)
     }
 
-    fn glyph_raster_bounds(
-        &self,
-        params: &RenderGlyphParams,
-    ) -> gpui::Result<Bounds<DevicePixels>> {
+    fn glyph_raster_bounds(&self, params: &RenderGlyphParams) -> gpui::Result<Bounds<DevicePixels>> {
         NoopTextSystem.glyph_raster_bounds(params)
     }
 
-    fn rasterize_glyph(
-        &self,
-        params: &RenderGlyphParams,
-        raster_bounds: Bounds<DevicePixels>,
-    ) -> gpui::Result<(Size<DevicePixels>, Vec<u8>)> {
+    fn rasterize_glyph(&self, params: &RenderGlyphParams, raster_bounds: Bounds<DevicePixels>) -> gpui::Result<(Size<DevicePixels>, Vec<u8>)> {
         NoopTextSystem.rasterize_glyph(params, raster_bounds)
     }
 
@@ -84,33 +98,23 @@ struct Shown {
 
 impl Render for Shown {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().w(px(640.0)).h(px(240.0)).child(
-            DiffViewer::new("diff", self.path, "", &format!("{}\n", self.line))
-                .headless()
-                .layout(self.layout),
-        )
+        div()
+            .w(px(640.0))
+            .h(px(240.0))
+            .child(DiffViewer::new("diff", self.path, "", &format!("{}\n", self.line)).headless().layout(self.layout))
     }
 }
 
 /// The glyph colors drawn, then keyword, number, comment.
 fn drawn(path: &'static str, line: &'static str, layout: DiffLayout) -> (Vec<Hsla>, [Hsla; 3]) {
     let painted = Arc::new(Painted::default());
-    let mut cx =
-        TestAppContext::build_with_text_system(TestDispatcher::new(0), None, painted.clone());
+    let mut cx = TestAppContext::build_with_text_system(TestDispatcher::new(0), None, painted.clone());
     // Hues no other part of the view draws.
-    let own = [
-        hsla(0.11, 1.0, 0.5, 1.0),
-        hsla(0.37, 1.0, 0.5, 1.0),
-        hsla(0.83, 1.0, 0.5, 1.0),
-    ];
+    let own = [hsla(0.11, 1.0, 0.5, 1.0), hsla(0.37, 1.0, 0.5, 1.0), hsla(0.83, 1.0, 0.5, 1.0)];
     cx.update(|cx| {
         crate::init_for_tests(cx);
         let mut palette = Palette::light(false);
-        [
-            palette.syntax.keyword,
-            palette.syntax.number,
-            palette.syntax.comment,
-        ] = own;
+        [palette.syntax.keyword, palette.syntax.number, palette.syntax.comment] = own;
         Theme::set_palette(Mode::Light, Some(palette), cx);
         Theme::set_mode_now(Mode::Light, cx);
     });
@@ -129,19 +133,10 @@ fn drawn(path: &'static str, line: &'static str, layout: DiffLayout) -> (Vec<Hsl
 fn the_drawn_diff_reads_its_own_language() {
     for layout in [DiffLayout::Unified, DiffLayout::Split] {
         let (rust, [keyword, number, comment]) = drawn("main.rs", "return 42", layout);
-        assert!(
-            rust.contains(&keyword) && rust.contains(&number),
-            "{layout:?}: Rust is code"
-        );
+        assert!(rust.contains(&keyword) && rust.contains(&number), "{layout:?}: Rust is code");
         let (markdown, _) = drawn("notes.md", "return 42", layout);
-        assert!(
-            !markdown.contains(&keyword) && !markdown.contains(&number),
-            "{layout:?}: Markdown is prose"
-        );
+        assert!(!markdown.contains(&keyword) && !markdown.contains(&number), "{layout:?}: Markdown is prose");
         let (python, _) = drawn("a.py", "# return 42", layout);
-        assert!(
-            python.contains(&comment) && !python.contains(&keyword),
-            "{layout:?}: Python's # opens a comment"
-        );
+        assert!(python.contains(&comment) && !python.contains(&keyword), "{layout:?}: Python's # opens a comment");
     }
 }

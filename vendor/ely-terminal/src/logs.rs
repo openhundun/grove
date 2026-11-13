@@ -1,18 +1,33 @@
+use super::ansi::AnsiText;
+use super::ansi::printed;
+use crate::buttons::SegmentedControl;
+use crate::buttons::ToggleButton;
+use crate::buttons::ToggleItem;
+use crate::primitives::IconName;
+use crate::theme::ActiveTheme;
+use crate::theme::ControlSize;
+use crate::theme::Palette;
+use crate::theme::TextSize;
+use crate::typography::format;
+use gpui::App;
+use gpui::ElementId;
+use gpui::Hsla;
+use gpui::InteractiveElement;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::Pixels;
+use gpui::RenderOnce;
+use gpui::ScrollDelta;
+use gpui::ScrollEvent;
+use gpui::ScrollStrategy;
+use gpui::SharedString;
+use gpui::Styled;
+use gpui::UniformListScrollHandle;
+use gpui::Window;
+use gpui::div;
+use gpui::prelude::*;
+use gpui::uniform_list;
 use std::rc::Rc;
-
-use gpui::{
-    App, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce,
-    ScrollDelta, ScrollEvent, ScrollStrategy, SharedString, Styled, UniformListScrollHandle,
-    Window, div, prelude::*, uniform_list,
-};
-
-use super::ansi::{AnsiText, printed};
-use crate::{
-    buttons::{SegmentedControl, ToggleButton, ToggleItem},
-    primitives::IconName,
-    theme::{ActiveTheme, ControlSize, Palette, TextSize},
-    typography::format,
-};
 
 /// How loud a log line is, quietest first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -29,13 +44,7 @@ pub enum LogLevel {
     Error,
 }
 
-const LEVELS: [LogLevel; 5] = [
-    LogLevel::Trace,
-    LogLevel::Debug,
-    LogLevel::Info,
-    LogLevel::Warn,
-    LogLevel::Error,
-];
+const LEVELS: [LogLevel; 5] = [LogLevel::Trace, LogLevel::Debug, LogLevel::Info, LogLevel::Warn, LogLevel::Error];
 
 impl LogLevel {
     fn word(self) -> &'static str {
@@ -78,11 +87,7 @@ pub(crate) fn shown(lines: &[LogLine], least: LogLevel, query: &str) -> Vec<usiz
         .iter()
         .enumerate()
         .filter(|(_, line)| line.level >= least)
-        .filter(|(_, line)| {
-            query.is_empty()
-                || line.target.to_lowercase().contains(&query)
-                || printed(&line.message).0.to_lowercase().contains(&query)
-        })
+        .filter(|(_, line)| query.is_empty() || line.target.to_lowercase().contains(&query) || printed(&line.message).0.to_lowercase().contains(&query))
         .map(|(ix, _)| ix)
         .collect()
 }
@@ -161,99 +166,57 @@ impl LogViewer {
 
 impl RenderOnce for LogViewer {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let scroll = window
-            .use_keyed_state((self.id.clone(), "scroll"), cx, |_, _| {
-                UniformListScrollHandle::new()
-            })
-            .read(cx)
-            .clone();
+        let scroll = window.use_keyed_state((self.id.clone(), "scroll"), cx, |_, _| UniformListScrollHandle::new()).read(cx).clone();
         let theme = cx.theme();
         let colors = theme.colors.clone();
         let rows = Rc::new(shown(&self.lines, self.least, &self.query));
         if self.follow && !rows.is_empty() {
             scroll.scroll_to_item(rows.len() - 1, ScrollStrategy::Bottom);
         }
-        let levels = LEVELS.iter().fold(
-            SegmentedControl::new((self.id.clone(), "levels"), self.least.word())
-                .size(ControlSize::Sm),
-            |control, level| control.segment(level.word(), level.word(), None),
-        );
+        let levels = LEVELS
+            .iter()
+            .fold(SegmentedControl::new((self.id.clone(), "levels"), self.least.word()).size(ControlSize::Sm), |control, level| {
+                control.segment(level.word(), level.word(), None)
+            });
         let levels = match self.on_least {
             Some(on_least) => levels.on_change(move |word, window, cx| {
-                let level = LEVELS
-                    .into_iter()
-                    .find(|level| level.word() == word.as_ref())
-                    .expect("a segment names a level");
+                let level = LEVELS.into_iter().find(|level| level.word() == word.as_ref()).expect("a segment names a level");
                 on_least(level, window, cx)
             }),
             None => levels,
         };
         let follow = ToggleButton::new(
             (self.id.clone(), "follow"),
-            ToggleItem::new("follow")
-                .icon(IconName::ArrowDownToLine)
-                .tooltip("Follow new lines"),
+            ToggleItem::new("follow").icon(IconName::ArrowDownToLine).tooltip("Follow new lines"),
             self.follow,
         )
         .size(ControlSize::Sm);
         let (release, follow) = match self.on_follow {
-            Some(on_follow) => (
-                Some(on_follow.clone()),
-                follow.on_toggle(move |on, window, cx| on_follow(on, window, cx)),
-            ),
+            Some(on_follow) => (Some(on_follow.clone()), follow.on_toggle(move |on, window, cx| on_follow(on, window, cx))),
             None => (None, follow),
         };
         let (lines, painted) = (self.lines.clone(), rows.clone());
-        let list = uniform_list(
-            (self.id.clone(), "lines"),
-            rows.len(),
-            move |range, _, cx| {
-                let colors = cx.theme().colors.clone();
-                range
-                    .map(|ix| {
-                        let line = &lines[painted[ix]];
-                        div()
-                            .id(ix)
-                            .w_full()
-                            .flex()
-                            .gap_3()
-                            .px_2()
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .when(line.level == LogLevel::Error, |row| {
-                                row.bg(colors.danger.opacity(0.06))
-                            })
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .text_color(colors.fg_subtle)
-                                    .child(line.at.clone()),
-                            )
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .w_12()
-                                    .text_color(line.level.color(&colors))
-                                    .child(line.level.word()),
-                            )
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .w_24()
-                                    .overflow_hidden()
-                                    .text_color(colors.fg_muted)
-                                    .child(line.target.clone()),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(AnsiText::new(line.message.clone())),
-                            )
-                    })
-                    .collect()
-            },
-        )
+        let list = uniform_list((self.id.clone(), "lines"), rows.len(), move |range, _, cx| {
+            let colors = cx.theme().colors.clone();
+            range
+                .map(|ix| {
+                    let line = &lines[painted[ix]];
+                    div()
+                        .id(ix)
+                        .w_full()
+                        .flex()
+                        .gap_3()
+                        .px_2()
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .when(line.level == LogLevel::Error, |row| row.bg(colors.danger.opacity(0.06)))
+                        .child(div().flex_none().text_color(colors.fg_subtle).child(line.at.clone()))
+                        .child(div().flex_none().w_12().text_color(line.level.color(&colors)).child(line.level.word()))
+                        .child(div().flex_none().w_24().overflow_hidden().text_color(colors.fg_muted).child(line.target.clone()))
+                        .child(div().flex_1().min_w_0().child(AnsiText::new(line.message.clone())))
+                })
+                .collect()
+        })
         .track_scroll(&scroll)
         .size_full();
         div()
@@ -268,11 +231,12 @@ impl RenderOnce for LogViewer {
                     .gap_2()
                     .pb_2()
                     .child(levels)
-                    .child(div().flex_1().text_color(colors.fg_subtle).child(format!(
-                        "{} of {}",
-                        rows.len(),
-                        format::plural(self.lines.len() as u64, "line", "lines")
-                    )))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_color(colors.fg_subtle)
+                            .child(format!("{} of {}", rows.len(), format::plural(self.lines.len() as u64, "line", "lines"))),
+                    )
                     .child(follow),
             )
             .child(
@@ -303,12 +267,7 @@ mod tests {
     use super::*;
 
     fn line(level: LogLevel, target: &str, message: &str) -> LogLine {
-        LogLine {
-            at: "12:00:00".into(),
-            level,
-            target: target.to_string().into(),
-            message: message.to_string().into(),
-        }
+        LogLine { at: "12:00:00".into(), level, target: target.to_string().into(), message: message.to_string().into() }
     }
 
     #[test]
@@ -319,11 +278,7 @@ mod tests {
             line(LogLevel::Error, "ely::pty", "the program ended"),
         ];
         assert_eq!(shown(&lines, LogLevel::Info, ""), [1, 2]);
-        assert_eq!(
-            shown(&lines, LogLevel::Trace, "ZSH"),
-            [1],
-            "codes and case aside"
-        );
+        assert_eq!(shown(&lines, LogLevel::Trace, "ZSH"), [1], "codes and case aside");
         assert_eq!(shown(&lines, LogLevel::Trace, "pty"), [2], "targets count");
     }
 }

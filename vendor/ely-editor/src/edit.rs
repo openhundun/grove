@@ -375,6 +375,7 @@ impl CodeEditor {
         }
         self.set_selections(chosen, cx);
         self.scroll.scroll_to_item(self.primary_row(), ScrollStrategy::Center);
+        self.reveal_x = true;
     }
 
     /// Replaces ranges of the text at once, as one undo step; read-only text refuses.

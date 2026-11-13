@@ -1,18 +1,39 @@
+use super::graph::GraphRow;
+use super::graph::Half;
+use crate::data_display::Avatar;
+use crate::data_display::Tag;
+use crate::data_display::Tone;
+use crate::primitives::FocusRing;
+use crate::theme::ActiveTheme;
+use crate::theme::AvatarSize;
+use crate::theme::ControlSize;
+use crate::theme::IconSize;
+use crate::theme::Radius;
+use crate::theme::TextSize;
+use crate::typography::Ellipsis;
+use gpui::AnyElement;
+use gpui::App;
+use gpui::Bounds;
+use gpui::ElementId;
+use gpui::Hsla;
+use gpui::InteractiveElement;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::PathBuilder;
+use gpui::Pixels;
+use gpui::RenderOnce;
+use gpui::Role;
+use gpui::SharedString;
+use gpui::StatefulInteractiveElement;
+use gpui::Styled;
+use gpui::Window;
+use gpui::canvas;
+use gpui::div;
+use gpui::point;
+use gpui::prelude::*;
+use gpui::size;
+use gpui::uniform_list;
 use std::rc::Rc;
-
-use gpui::{
-    AnyElement, App, Bounds, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement,
-    PathBuilder, Pixels, RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled,
-    Window, canvas, div, point, prelude::*, size, uniform_list,
-};
-
-use super::graph::{GraphRow, Half};
-use crate::{
-    data_display::{Avatar, Tag, Tone},
-    primitives::FocusRing,
-    theme::{ActiveTheme, AvatarSize, ControlSize, IconSize, Radius, TextSize},
-    typography::Ellipsis,
-};
 
 /// A commit as lists show it; first parent first.
 #[derive(Clone, Debug, PartialEq)]
@@ -59,12 +80,7 @@ pub struct CommitItem {
 impl CommitItem {
     /// A row under `id` for `commit`.
     pub fn new(id: impl Into<ElementId>, commit: Commit) -> Self {
-        Self {
-            id: id.into(),
-            commit,
-            selected: false,
-            on_pick: None,
-        }
+        Self { id: id.into(), commit, selected: false, on_pick: None }
     }
 
     /// Marks the row as picked.
@@ -74,10 +90,7 @@ impl CommitItem {
     }
 
     /// Runs with the commit's id when the row is pressed.
-    pub fn on_pick(
-        mut self,
-        handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_pick(mut self, handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static) -> Self {
         self.on_pick = Some(Rc::new(handler));
         self
     }
@@ -115,14 +128,8 @@ impl RenderOnce for CommitItem {
             .text_size(theme.text_size(TextSize::Sm))
             .when(self.selected, |row| row.bg(colors.active))
             .when(!self.selected, |row| row.hover(|row| row.bg(colors.hover)))
-            .when_some(pick, |row, pick| {
-                row.cursor_pointer()
-                    .on_click(move |_, window, cx| pick(&picked, window, cx))
-            })
-            .child(
-                Avatar::new((self.id.clone(), "author"), commit.author.clone())
-                    .size(AvatarSize::Xs),
-            )
+            .when_some(pick, |row, pick| row.cursor_pointer().on_click(move |_, window, cx| pick(&picked, window, cx)))
+            .child(Avatar::new((self.id.clone(), "author"), commit.author.clone()).size(AvatarSize::Xs))
             .children(commit.refs.iter().enumerate().map(|(ix, name)| {
                 let tone = if name.starts_with('v') {
                     Tone::Warning
@@ -133,13 +140,7 @@ impl RenderOnce for CommitItem {
                 };
                 Tag::new((self.id.clone(), format!("ref-{ix}")), name.clone()).tone(tone)
             }))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_24()
-                    .text_color(colors.fg)
-                    .child(Ellipsis::new(commit.subject)),
-            )
+            .child(div().flex_1().min_w_24().text_color(colors.fg).child(Ellipsis::new(commit.subject)))
             // Narrow, the details give way before the subject.
             .child(
                 div()
@@ -150,12 +151,7 @@ impl RenderOnce for CommitItem {
                     .flex()
                     .gap_2()
                     .child(div().text_color(colors.fg_muted).child(commit.author))
-                    .child(
-                        div()
-                            .font_family(theme.mono_family.clone())
-                            .text_color(colors.fg_subtle)
-                            .child(short),
-                    )
+                    .child(div().font_family(theme.mono_family.clone()).text_color(colors.fg_subtle).child(short))
                     .child(div().text_color(colors.fg_subtle).child(commit.when)),
             )
     }
@@ -193,14 +189,7 @@ pub struct CommitList {
 impl CommitList {
     /// A list under `id` of `commits`, newest first.
     pub fn new(id: impl Into<ElementId>, commits: Rc<Vec<Commit>>) -> Self {
-        Self {
-            id: id.into(),
-            commits,
-            graph: None,
-            selected: None,
-            on_pick: None,
-            on_end: None,
-        }
+        Self { id: id.into(), commits, graph: None, selected: None, on_pick: None, on_end: None }
     }
 
     /// The commit shown as picked, by id.
@@ -210,10 +199,7 @@ impl CommitList {
     }
 
     /// Runs with the id of the commit pressed.
-    pub fn on_pick(
-        mut self,
-        handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_pick(mut self, handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static) -> Self {
         self.on_pick = Some(Rc::new(handler));
         self
     }
@@ -235,24 +221,13 @@ impl CommitList {
 const NEAR_END: usize = 20;
 
 /// Paints one row's lanes, `span` wide so rows line up.
-fn lanes_cell(
-    row: GraphRow,
-    span: usize,
-    lane: Pixels,
-    height: Pixels,
-    stroke: Pixels,
-    palette: [Hsla; 8],
-) -> AnyElement {
+fn lanes_cell(row: GraphRow, span: usize, lane: Pixels, height: Pixels, stroke: Pixels, palette: [Hsla; 8]) -> AnyElement {
     let width = lane * span as f32;
     canvas(
         |_, _, _| {},
         move |bounds: Bounds<Pixels>, _, window, _| {
             let x = |at: usize| bounds.origin.x + lane * (at as f32 + 0.5);
-            let (top, middle, bottom) = (
-                bounds.origin.y,
-                bounds.origin.y + height / 2.0,
-                bounds.origin.y + height,
-            );
+            let (top, middle, bottom) = (bounds.origin.y, bounds.origin.y + height / 2.0, bounds.origin.y + height);
             for piece in &row.strokes {
                 let (from, to) = match piece.half {
                     Half::Top => (point(x(piece.from), top), point(x(piece.to), middle)),
@@ -270,13 +245,7 @@ fn lanes_cell(
             }
             let dot = lane * 0.45;
             let center = point(x(row.lane), middle);
-            window.paint_quad(
-                gpui::fill(
-                    Bounds::new(center - point(dot / 2.0, dot / 2.0), size(dot, dot)),
-                    palette[row.lane % palette.len()],
-                )
-                .corner_radii(dot / 2.0),
-            );
+            window.paint_quad(gpui::fill(Bounds::new(center - point(dot / 2.0, dot / 2.0), size(dot, dot)), palette[row.lane % palette.len()]).corner_radii(dot / 2.0));
         },
     )
     .flex_none()
@@ -290,27 +259,10 @@ impl RenderOnce for CommitList {
         if let Some(graph) = &self.graph
             && graph.len() != self.commits.len()
         {
-            log::error!(
-                "commit list: {} graph rows for {} commits; rows past them draw bare",
-                graph.len(),
-                self.commits.len()
-            );
+            log::error!("commit list: {} graph rows for {} commits; rows past them draw bare", graph.len(), self.commits.len());
         }
-        let span = self
-            .graph
-            .iter()
-            .flat_map(|rows| rows.iter())
-            .map(|row| row.width)
-            .max()
-            .unwrap_or(0);
-        let Self {
-            id,
-            commits,
-            graph,
-            selected,
-            on_pick,
-            on_end,
-        } = self;
+        let span = self.graph.iter().flat_map(|rows| rows.iter()).map(|row| row.width).max().unwrap_or(0);
+        let Self { id, commits, graph, selected, on_pick, on_end } = self;
         let count = commits.len();
         uniform_list((id.clone(), "rows"), count, move |range, window, cx| {
             if let Some(on_end) = on_end.clone().filter(|_| range.end + NEAR_END >= count) {
@@ -326,8 +278,7 @@ impl RenderOnce for CommitList {
                 .map(|ix| {
                     let commit = commits[ix].clone();
                     let picked = selected.as_ref() == Some(&commit.id);
-                    let item =
-                        CommitItem::new((id.clone(), commit.id.clone()), commit).selected(picked);
+                    let item = CommitItem::new((id.clone(), commit.id.clone()), commit).selected(picked);
                     let item = match &on_pick {
                         Some(pick) => {
                             let pick = pick.clone();
@@ -340,9 +291,7 @@ impl RenderOnce for CommitList {
                         .w_full()
                         .flex()
                         .items_center()
-                        .children(
-                            lanes.map(|row| lanes_cell(row, span, lane, height, stroke, palette)),
-                        )
+                        .children(lanes.map(|row| lanes_cell(row, span, lane, height, stroke, palette)))
                         .child(item)
                 })
                 .collect()

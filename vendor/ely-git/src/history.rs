@@ -1,16 +1,25 @@
+use super::badges::DiffStat;
+use super::commits::Commit;
+use crate::primitives::FocusRing;
+use crate::theme::ActiveTheme;
+use crate::theme::Radius;
+use crate::theme::TextSize;
+use crate::typography::Ellipsis;
+use gpui::App;
+use gpui::ElementId;
+use gpui::InteractiveElement;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::RenderOnce;
+use gpui::Role;
+use gpui::SharedString;
+use gpui::StatefulInteractiveElement;
+use gpui::Styled;
+use gpui::Window;
+use gpui::div;
+use gpui::prelude::*;
+use gpui::uniform_list;
 use std::rc::Rc;
-
-use gpui::{
-    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, Role, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, prelude::*, uniform_list,
-};
-
-use super::{badges::DiffStat, commits::Commit};
-use crate::{
-    primitives::FocusRing,
-    theme::{ActiveTheme, Radius, TextSize},
-    typography::Ellipsis,
-};
 
 type OnPick = Rc<dyn Fn(&SharedString, &mut Window, &mut App)>;
 /// A commit with lines added and removed, if counted.
@@ -43,12 +52,7 @@ pub struct FileHistory {
 impl FileHistory {
     /// Each commit with lines added and removed, if counted.
     pub fn new(id: impl Into<ElementId>, commits: Rc<Vec<Counted>>) -> Self {
-        Self {
-            id: id.into(),
-            commits,
-            selected: None,
-            on_pick: None,
-        }
+        Self { id: id.into(), commits, selected: None, on_pick: None }
     }
 
     /// The commit shown as picked, by id.
@@ -58,10 +62,7 @@ impl FileHistory {
     }
 
     /// Runs with the id of the commit pressed.
-    pub fn on_pick(
-        mut self,
-        handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_pick(mut self, handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static) -> Self {
         self.on_pick = Some(Rc::new(handler));
         self
     }
@@ -69,12 +70,7 @@ impl FileHistory {
 
 impl RenderOnce for FileHistory {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let Self {
-            id,
-            commits,
-            selected,
-            on_pick,
-        } = self;
+        let Self { id, commits, selected, on_pick } = self;
         let last = commits.len().saturating_sub(1);
         uniform_list((id.clone(), "rows"), commits.len(), move |range, _, cx| {
             let theme = cx.theme();
@@ -102,34 +98,23 @@ impl RenderOnce for FileHistory {
                         .rounded(theme.radius(Radius::Sm))
                         .when(picked, |row| row.bg(colors.active))
                         .when(!picked, |row| row.hover(|row| row.bg(colors.hover)))
-                        .when_some(pick, |row, pick| {
-                            row.cursor_pointer()
-                                .on_click(move |_, window, cx| pick(&picked_id, window, cx))
-                        })
+                        .when_some(pick, |row, pick| row.cursor_pointer().on_click(move |_, window, cx| pick(&picked_id, window, cx)))
                         .child(
                             div()
                                 .flex_none()
                                 .flex()
                                 .flex_col()
                                 .items_center()
-                                .child(div().w_0().h_2().when(ix > 0, |line| {
-                                    line.border_l_1().border_color(colors.border)
-                                }))
+                                .child(div().w_0().h_2().when(ix > 0, |line| line.border_l_1().border_color(colors.border)))
                                 .child(
                                     div()
                                         .size_2()
                                         .rounded_full()
                                         .border_1()
-                                        .border_color(if picked {
-                                            colors.focus
-                                        } else {
-                                            colors.border_strong
-                                        })
+                                        .border_color(if picked { colors.focus } else { colors.border_strong })
                                         .bg(if ix == 0 { colors.focus } else { colors.bg }),
                                 )
-                                .child(div().w_0().flex_1().when(ix < last, |line| {
-                                    line.border_l_1().border_color(colors.border)
-                                })),
+                                .child(div().w_0().flex_1().when(ix < last, |line| line.border_l_1().border_color(colors.border))),
                         )
                         .child(
                             div()
@@ -139,11 +124,7 @@ impl RenderOnce for FileHistory {
                                 .flex()
                                 .flex_col()
                                 .gap_0p5()
-                                .child(
-                                    div()
-                                        .text_color(colors.fg)
-                                        .child(Ellipsis::new(commit.subject.clone())),
-                                )
+                                .child(div().text_color(colors.fg).child(Ellipsis::new(commit.subject.clone())))
                                 .child(
                                     div()
                                         .flex()
@@ -153,19 +134,10 @@ impl RenderOnce for FileHistory {
                                         .text_color(colors.fg_subtle)
                                         .child(commit.author.clone())
                                         .child(commit.when.clone())
-                                        .child(
-                                            div()
-                                                .font_family(theme.mono_family.clone())
-                                                .child(short),
-                                        ),
+                                        .child(div().font_family(theme.mono_family.clone()).child(short)),
                                 ),
                         )
-                        .children(lines.map(|(added, removed)| {
-                            div()
-                                .flex_none()
-                                .py_1p5()
-                                .child(DiffStat::new(added, removed))
-                        }))
+                        .children(lines.map(|(added, removed)| div().flex_none().py_1p5().child(DiffStat::new(added, removed))))
                 })
                 .collect()
         })

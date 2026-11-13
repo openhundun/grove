@@ -1,4 +1,5 @@
 //! Ordinary ELY PTYs owned by a workspace tab and identified by launch cwd and slot.
+use crate::settings::Typography;
 use ely_terminal::Launch;
 use ely_terminal::Terminal;
 use gpui_kit::*;
@@ -17,6 +18,18 @@ pub struct Session {
 }
 
 impl Session {
+    pub fn is_live(&self, cx: &App) -> bool {
+        self.terminal.as_ref().is_some_and(|terminal| terminal.read(cx).exit_status().is_none())
+    }
+
+    /// Unsubscribe before shutdown; rendered entity clones must not keep a closed workspace's PTY alive.
+    pub fn dispose(&mut self, cx: &mut App) {
+        self._subscription = None;
+        if let Some(terminal) = self.terminal.take() {
+            terminal.update(cx, |terminal, _| terminal.shutdown());
+        }
+    }
+
     pub fn status(&self, cx: &App) -> &'static str {
         match &self.terminal {
             Some(terminal) if terminal.read(cx).exit_status().is_some() => "Exited",
@@ -24,7 +37,7 @@ impl Session {
             None => "Error",
         }
     }
-    pub fn spawn(key: &SessionKey, font_family: SharedString, window: &mut Window, cx: &mut App) -> Self {
+    pub fn spawn(key: &SessionKey, typography: &Typography, window: &mut Window, cx: &mut App) -> Self {
         let config = grove_platform::shell_launch(&key.cwd);
         let program = match config.program.into_string() {
             Ok(program) => program,
@@ -37,7 +50,11 @@ impl Session {
         let launch = Launch { cwd: Some(config.cwd), program: Some((program, argument_list)), env: Vec::new() };
         let mut error = None;
         let terminal = cx.new(|cx| match Terminal::spawn(launch, cx) {
-            Ok(terminal) => terminal.font_family(font_family.clone()),
+            Ok(terminal) => terminal
+                .font_family(typography.font_family.clone())
+                .font_size(typography.font_size)
+                .font_weight(FontWeight(typography.font_weight as f32))
+                .line_height(typography.line_height),
             Err(reason) => {
                 error = Some(format!("Unable to start terminal: {reason:#}"));
                 // GPUI's entity builder is infallible. Discard this inert entity below.

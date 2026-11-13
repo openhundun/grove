@@ -1,16 +1,24 @@
+use super::refs::Entry;
+use super::refs::OnName;
+use super::refs::Pick;
+use super::refs::Run;
+use super::refs::action;
+use super::refs::listed;
+use crate::i18n;
+use crate::primitives::IconName;
+use crate::theme::ActiveTheme;
+use crate::theme::TextSize;
+use gpui::AnyElement;
+use gpui::App;
+use gpui::ElementId;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::RenderOnce;
+use gpui::SharedString;
+use gpui::Styled;
+use gpui::Window;
+use gpui::div;
 use std::rc::Rc;
-
-use gpui::{
-    AnyElement, App, ElementId, IntoElement, ParentElement, RenderOnce, SharedString, Styled,
-    Window, div,
-};
-
-use super::refs::{Entry, OnName, Pick, Run, action, listed};
-use crate::{
-    i18n,
-    primitives::IconName,
-    theme::{ActiveTheme, TextSize},
-};
 
 type OnStash = Rc<dyn Fn(usize, StashAction, &mut Window, &mut App)>;
 type OnAt = Rc<dyn Fn(usize, &mut Window, &mut App)>;
@@ -50,12 +58,7 @@ pub struct TagList {
 impl TagList {
     /// A list under `id` of `tags`.
     pub fn new(id: impl Into<ElementId>, tags: impl IntoIterator<Item = GitTag>) -> Self {
-        Self {
-            id: id.into(),
-            tags: tags.into_iter().collect(),
-            selected: None,
-            on_pick: None,
-        }
+        Self { id: id.into(), tags: tags.into_iter().collect(), selected: None, on_pick: None }
     }
 
     /// The tag shown as picked.
@@ -65,10 +68,7 @@ impl TagList {
     }
 
     /// A press on a row picks its tag.
-    pub fn on_pick(
-        mut self,
-        handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_pick(mut self, handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static) -> Self {
         self.on_pick = Some(Rc::new(handler));
         self
     }
@@ -87,10 +87,7 @@ impl RenderOnce for TagList {
                     (self.id.clone(), format!("tag-{}", tag.name)).into(),
                     Entry {
                         icon: IconName::Tag,
-                        name: div()
-                            .text_color(colors.fg)
-                            .child(tag.name.clone())
-                            .into_any_element(),
+                        name: div().text_color(colors.fg).child(tag.name.clone()).into_any_element(),
                         detail: tag.message.clone().unwrap_or_default(),
                         trailing: vec![short.into(), tag.when.clone()],
                         actions: Vec::new(),
@@ -100,20 +97,14 @@ impl RenderOnce for TagList {
                         Pick {
                             spoken: tag.name.clone(),
                             selected: self.selected.as_ref() == Some(&tag.name),
-                            run: Rc::new(move |window: &mut Window, cx: &mut App| {
-                                pick(&name, window, cx)
-                            }),
+                            run: Rc::new(move |window: &mut Window, cx: &mut App| pick(&name, window, cx)),
                         }
                     }),
                     cx,
                 )
             })
             .collect();
-        div()
-            .flex()
-            .flex_col()
-            .text_size(theme.text_size(TextSize::Sm))
-            .children(rows)
+        div().flex().flex_col().text_size(theme.text_size(TextSize::Sm)).children(rows)
     }
 }
 
@@ -184,10 +175,7 @@ impl StashList {
     }
 
     /// Runs with a stash's place and the action asked for.
-    pub fn on_action(
-        mut self,
-        handler: impl Fn(usize, StashAction, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_action(mut self, handler: impl Fn(usize, StashAction, &mut Window, &mut App) + 'static) -> Self {
         self.on_action = Some(Rc::new(handler));
         self
     }
@@ -212,19 +200,13 @@ impl RenderOnce for StashList {
                 .into_iter()
                 .filter_map(|(key, icon, what)| {
                     let on_action = self.on_action.clone()?;
-                    let run = Rc::new(move |window: &mut Window, cx: &mut App| {
-                        on_action(ix, what, window, cx)
-                    }) as Run;
+                    let run = Rc::new(move |window: &mut Window, cx: &mut App| on_action(ix, what, window, cx)) as Run;
                     let words = i18n::text(cx, &format!("git.stash.{key}"), &[]);
                     let id = (self.id.clone(), format!("{key}-{ix}")).into();
                     Some(action(id, icon, words, Some(run)))
                 })
                 .collect();
-                let detail = i18n::text(
-                    cx,
-                    "git.stash.on",
-                    &[("message", &stash.message), ("branch", &stash.branch)],
-                );
+                let detail = i18n::text(cx, "git.stash.on", &[("message", &stash.message), ("branch", &stash.branch)]);
                 let pick = self.on_pick.clone().map(|pick| Pick {
                     spoken: format!("{name} {detail}").into(),
                     selected: self.selected == Some(ix),
@@ -234,11 +216,7 @@ impl RenderOnce for StashList {
                     (self.id.clone(), format!("stash-{ix}")).into(),
                     Entry {
                         icon: IconName::Archive,
-                        name: div()
-                            .font_family(theme.mono_family.clone())
-                            .text_color(colors.fg)
-                            .child(name)
-                            .into_any_element(),
+                        name: div().font_family(theme.mono_family.clone()).text_color(colors.fg).child(name).into_any_element(),
                         detail,
                         trailing: vec![stash.when.clone()],
                         actions,
@@ -248,10 +226,6 @@ impl RenderOnce for StashList {
                 )
             })
             .collect();
-        div()
-            .flex()
-            .flex_col()
-            .text_size(theme.text_size(TextSize::Sm))
-            .children(rows)
+        div().flex().flex_col().text_size(theme.text_size(TextSize::Sm)).children(rows)
     }
 }

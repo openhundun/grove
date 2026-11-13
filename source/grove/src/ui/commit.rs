@@ -2,22 +2,26 @@ use super::*;
 
 impl Grove {
     pub(super) fn history_row(&self, selection: HistorySelection, label: String, index: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let typography = &self.settings.commits;
         h_flex()
             .id(("history", index))
-            .h(px(26.))
+            .h(px(typography.row_height()))
             .flex_shrink_0()
             .items_center()
+            .overflow_hidden()
+            .refine_style(&typography.style())
             .cursor_pointer()
             .border_b_1()
             .border_color(rgb(0xf1f1f4))
             .when(self.state().history == selection, |this| this.bg(rgb(SELECT)))
             .hover(|this| this.bg(rgb(SURFACE)))
-            .child(div().w(px(36.)).text_center().text_color(rgb(META)).child("○"))
-            .child(div().flex_1().truncate().text_size(px(10.)).child(label))
+            .child(div().w(px(36.)).flex_shrink_0().text_center().text_color(rgb(META)).child("○"))
+            .child(div().flex_1().flex_shrink_0().whitespace_nowrap().child(label))
             .on_click(cx.listener(move |this, _, _, cx| this.select_history(selection, cx)))
     }
     pub(super) fn commits(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let compare = self.state().compare;
+        let typography = &self.settings.commits;
         let mut head = self
             .chrome("Commits")
             .child(div().flex_1())
@@ -37,25 +41,16 @@ impl Grove {
                 .and_then(|data| data.base_ref_list.get(self.state().base))
                 .cloned()
                 .unwrap_or_else(|| "No local base ref".into());
-            head = head.child(
-                self.segment("compare-base", label, true)
-                    .font_family(self.settings.commits_font.clone())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        let count = this.view().worktree_data.as_ref().map_or(0, |data| data.base_ref_list.len());
-                        if count > 0 {
-                            this.state_mut().base = (this.state().base + 1) % count;
-                            this.select_history(HistorySelection::Comparison, cx);
-                        }
-                    })),
-            );
+            head = head.child(self.segment("compare-base", label, true).on_click(cx.listener(|this, _, _, cx| {
+                let count = this.view().worktree_data.as_ref().map_or(0, |data| data.base_ref_list.len());
+                if count > 0 {
+                    this.state_mut().base = (this.state().base + 1) % count;
+                    this.select_history(HistorySelection::Comparison, cx);
+                }
+            })));
         }
-        let mut body = v_flex()
-            .id("commit-list")
-            .font_family(self.settings.commits_font.clone())
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .track_scroll(&self.view().commit_scroll);
+        head = head.child(self.refresh_button("refresh-commits", "Refresh worktree history", RefreshTarget::Worktree, cx));
+        let mut body = v_flex().id("commit-list").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.view().commit_scroll);
         if let Some(data) = &self.view().worktree_data {
             if compare {
                 body = body.child(self.history_row(HistorySelection::Comparison, "Local merge-base → HEAD · no remote PR metadata".into(), 2, cx));
@@ -68,9 +63,11 @@ impl Grove {
                     body = body.child(
                         h_flex()
                             .id(("commit", index))
-                            .h(px(26.))
+                            .h(px(typography.row_height()))
                             .flex_shrink_0()
                             .items_center()
+                            .overflow_hidden()
+                            .refine_style(&typography.style())
                             .gap(px(8.))
                             .border_b_1()
                             .border_color(rgb(0xf1f1f4))
@@ -78,10 +75,10 @@ impl Grove {
                             .when(self.state().history == HistorySelection::Commit(index), |this| this.bg(rgb(SELECT)))
                             .hover(|this| this.bg(rgb(SURFACE)))
                             .child(commit_graph(&self.view().graph_list[index], graph_width))
-                            .child(div().flex_1().min_w_0().truncate().text_size(px(10.)).child(commit.subject.clone()))
-                            .child(div().w(px(120.)).truncate().text_color(rgb(MUTED)).text_size(px(10.)).child(commit.author.clone()))
-                            .child(div().w(px(76.)).text_color(rgb(META)).text_size(px(9.5)).child(commit.date.clone()))
-                            .child(div().w(px(64.)).text_size(px(9.)).child(commit.oid[..commit.oid.len().min(8)].to_owned()))
+                            .child(div().flex_1().flex_shrink_0().whitespace_nowrap().child(commit.subject.clone()))
+                            .child(div().flex_shrink_0().whitespace_nowrap().text_color(rgb(MUTED)).child(commit.author.clone()))
+                            .child(div().w(px(76.)).flex_shrink_0().whitespace_nowrap().text_color(rgb(META)).child(commit.date.clone()))
+                            .child(div().w(px(64.)).flex_shrink_0().whitespace_nowrap().child(commit.oid[..commit.oid.len().min(8)].to_owned()))
                             .on_click(cx.listener(move |this, _, _, cx| this.select_history(HistorySelection::Commit(index), cx))),
                     );
                 }

@@ -1,17 +1,34 @@
 //! Long lists draw in view, load more, pick by key.
 
-use std::{cell::RefCell, rc::Rc};
-
-use gpui::{
-    Context, IntoElement, KeyBinding, KeyUpEvent, Keystroke, ParentElement, Render, Styled,
-    TestAppContext, VisualTestContext, Window, div, px,
-};
-
-use crate::{
-    Blame, BlameView, Branch, BranchList, Commit, CommitList, FileHistory, GitTag, Stash,
-    StashList, TagList,
-};
-use crate::{forms, primitives::FocusNext, theme::Theme};
+use crate::Blame;
+use crate::BlameView;
+use crate::Branch;
+use crate::BranchList;
+use crate::Commit;
+use crate::CommitList;
+use crate::FileHistory;
+use crate::GitTag;
+use crate::Stash;
+use crate::StashList;
+use crate::TagList;
+use crate::forms;
+use crate::primitives::FocusNext;
+use crate::theme::Theme;
+use gpui::Context;
+use gpui::IntoElement;
+use gpui::KeyBinding;
+use gpui::KeyUpEvent;
+use gpui::Keystroke;
+use gpui::ParentElement;
+use gpui::Render;
+use gpui::Styled;
+use gpui::TestAppContext;
+use gpui::VisualTestContext;
+use gpui::Window;
+use gpui::div;
+use gpui::px;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 fn commit(n: usize) -> Commit {
     Commit {
@@ -48,13 +65,7 @@ impl Render for Lists {
                     .on_pick(move |id, _, _| pick.borrow_mut().picked.push(id.to_string()))
                     .on_end(move |_| end.borrow_mut().ends += 1),
             ),
-            "history" => frame.child(
-                FileHistory::new(
-                    "history",
-                    Rc::new(commits.into_iter().map(|c| (c, None)).collect()),
-                )
-                .on_pick(move |id, _, _| pick.borrow_mut().picked.push(id.to_string())),
-            ),
+            "history" => frame.child(FileHistory::new("history", Rc::new(commits.into_iter().map(|c| (c, None)).collect())).on_pick(move |id, _, _| pick.borrow_mut().picked.push(id.to_string()))),
             "refs" => {
                 let branch = |name: &str, current| Branch {
                     name: name.to_string().into(),
@@ -65,76 +76,36 @@ impl Render for Lists {
                     subject: "s".into(),
                     when: "today".into(),
                 };
-                let tag = GitTag {
-                    name: "v1".into(),
-                    message: None,
-                    commit: "a1".into(),
-                    when: "today".into(),
-                };
-                let (tagged, switched, deleted) =
-                    (self.heard.clone(), self.heard.clone(), self.heard.clone());
+                let tag = GitTag { name: "v1".into(), message: None, commit: "a1".into(), when: "today".into() };
+                let (tagged, switched, deleted) = (self.heard.clone(), self.heard.clone(), self.heard.clone());
                 frame
                     .child(
                         BranchList::new("branches", [branch("main", true), branch("side", false)])
-                            .on_pick(move |name, _, _| {
-                                pick.borrow_mut().picked.push(name.to_string())
-                            })
-                            .on_switch(move |name, _, _| {
-                                switched.borrow_mut().picked.push(format!("switch {name}"))
-                            })
-                            .on_delete(move |name, _, _| {
-                                deleted.borrow_mut().picked.push(format!("delete {name}"))
-                            }),
+                            .on_pick(move |name, _, _| pick.borrow_mut().picked.push(name.to_string()))
+                            .on_switch(move |name, _, _| switched.borrow_mut().picked.push(format!("switch {name}")))
+                            .on_delete(move |name, _, _| deleted.borrow_mut().picked.push(format!("delete {name}"))),
                     )
-                    .child(TagList::new("tags", [tag]).on_pick(move |name, _, _| {
-                        tagged.borrow_mut().picked.push(name.to_string())
-                    }))
+                    .child(TagList::new("tags", [tag]).on_pick(move |name, _, _| tagged.borrow_mut().picked.push(name.to_string())))
             }
             "stashes" => {
-                let stash = |message: &str| Stash {
-                    message: message.to_string().into(),
-                    branch: "main".into(),
-                    when: "today".into(),
-                };
+                let stash = |message: &str| Stash { message: message.to_string().into(), branch: "main".into(), when: "today".into() };
                 let acted = self.heard.clone();
-                frame
-                    .child(StashList::new("bare", [stash("unhandled")]))
-                    .child(
-                        StashList::new("stashes", [stash("one"), stash("two")])
-                            .selected(1)
-                            .on_pick(move |ix, _, _| pick.borrow_mut().picked.push(format!("{ix}")))
-                            .on_action(move |ix, what, _, _| {
-                                acted.borrow_mut().picked.push(format!("{what:?} {ix}"))
-                            }),
-                    )
+                frame.child(StashList::new("bare", [stash("unhandled")])).child(
+                    StashList::new("stashes", [stash("one"), stash("two")])
+                        .selected(1)
+                        .on_pick(move |ix, _, _| pick.borrow_mut().picked.push(format!("{ix}")))
+                        .on_action(move |ix, what, _, _| acted.borrow_mut().picked.push(format!("{what:?} {ix}"))),
+                )
             }
             _ => {
-                let blame = |commit: &str| Blame {
-                    commit: commit.into(),
-                    author: "Ann".into(),
-                    when: "today".into(),
-                    subject: "first".into(),
-                    age: 0.0,
-                };
-                frame.child(
-                    BlameView::new(
-                        "blame",
-                        "one\ntwo\nthree",
-                        [0, 0, 1],
-                        [blame("a1"), blame("b2")],
-                    )
-                    .on_commit(move |id, _, _| pick.borrow_mut().picked.push(id.to_string())),
-                )
+                let blame = |commit: &str| Blame { commit: commit.into(), author: "Ann".into(), when: "today".into(), subject: "first".into(), age: 0.0 };
+                frame.child(BlameView::new("blame", "one\ntwo\nthree", [0, 0, 1], [blame("a1"), blame("b2")]).on_commit(move |id, _, _| pick.borrow_mut().picked.push(id.to_string())))
             }
         }
     }
 }
 
-fn shown<'a>(
-    cx: &'a mut TestAppContext,
-    count: usize,
-    which: &'static str,
-) -> (Rc<RefCell<Heard>>, &'a mut VisualTestContext) {
+fn shown<'a>(cx: &'a mut TestAppContext, count: usize, which: &'static str) -> (Rc<RefCell<Heard>>, &'a mut VisualTestContext) {
     cx.update(|cx| {
         Theme::init(cx);
         forms::bind_keys(cx);
@@ -142,11 +113,7 @@ fn shown<'a>(
     });
     let heard = Rc::new(RefCell::new(Heard::default()));
     let held = heard.clone();
-    let (_, cx) = cx.add_window_view(move |_, _| Lists {
-        count,
-        heard: held,
-        which,
-    });
+    let (_, cx) = cx.add_window_view(move |_, _| Lists { count, heard: held, which });
     cx.update(|window, _| window.activate_window());
     settle(cx);
     (heard, cx)
@@ -164,9 +131,7 @@ fn press_first(cx: &mut VisualTestContext) {
     settle(cx);
     cx.simulate_keystrokes("enter");
     settle(cx);
-    cx.simulate_event(KeyUpEvent {
-        keystroke: Keystroke::parse("enter").expect("a key"),
-    });
+    cx.simulate_event(KeyUpEvent { keystroke: Keystroke::parse("enter").expect("a key") });
     settle(cx);
 }
 
@@ -204,15 +169,9 @@ fn a_blame_run_picks_its_commit_from_the_keyboard(cx: &mut TestAppContext) {
     settle(cx);
     cx.simulate_keystrokes("enter");
     settle(cx);
-    cx.simulate_event(KeyUpEvent {
-        keystroke: Keystroke::parse("enter").expect("a key"),
-    });
+    cx.simulate_event(KeyUpEvent { keystroke: Keystroke::parse("enter").expect("a key") });
     settle(cx);
-    assert_eq!(
-        heard.borrow().picked,
-        ["a1", "b2"],
-        "each run's head, no stop between"
-    );
+    assert_eq!(heard.borrow().picked, ["a1", "b2"], "each run's head, no stop between");
 }
 
 #[gpui::test]
@@ -228,15 +187,9 @@ fn branches_and_tags_pick_from_the_keyboard(cx: &mut TestAppContext) {
     }
     let picked = heard.borrow().picked.clone();
     assert_eq!(picked.first().map(String::as_str), Some("main"));
-    assert!(
-        picked.contains(&"side".to_string()) && picked.contains(&"v1".to_string()),
-        "{picked:?}"
-    );
+    assert!(picked.contains(&"side".to_string()) && picked.contains(&"v1".to_string()), "{picked:?}");
     let acted = |what: &str| picked.iter().any(|said| said == what);
-    assert!(
-        acted("switch side") && acted("delete side"),
-        "row actions answer: {picked:?}"
-    );
+    assert!(acted("switch side") && acted("delete side"), "row actions answer: {picked:?}");
 }
 
 #[gpui::test]
@@ -245,9 +198,5 @@ fn stashes_pick_and_act_from_the_keyboard(cx: &mut TestAppContext) {
     for _ in 0..4 {
         press_first(cx);
     }
-    assert_eq!(
-        heard.borrow().picked,
-        ["0", "Apply 0", "Pop 0", "Drop 0"],
-        "a list with no owner draws no stops"
-    );
+    assert_eq!(heard.borrow().picked, ["0", "Apply 0", "Pop 0", "Drop 0"], "a list with no owner draws no stops");
 }

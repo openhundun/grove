@@ -1,7 +1,8 @@
-use std::ops::Range;
-
 use gpui::SharedString;
-use similar::{ChangeTag, TextDiff, udiff::UnifiedHunkHeader};
+use similar::ChangeTag;
+use similar::TextDiff;
+use similar::udiff::UnifiedHunkHeader;
+use std::ops::Range;
 
 /// Whether a diff line stayed, came in, or went.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,25 +57,14 @@ fn same(text: &str, old: usize, new: usize) -> DiffLine {
 /// `old` against `new`, `context` lines per hunk, the rest folded.
 pub fn diff(old: &str, new: &str, context: usize) -> Vec<Stretch> {
     let diff = TextDiff::from_lines(old, new);
-    let (olds, news): (Vec<&str>, Vec<&str>) = (
-        diff.iter_old_slices().collect(),
-        diff.iter_new_slices().collect(),
-    );
+    let (olds, news): (Vec<&str>, Vec<&str>) = (diff.iter_old_slices().collect(), diff.iter_new_slices().collect());
     let mut out = Vec::new();
     let mut at = (0, 0);
     for group in diff.grouped_ops(context) {
-        let (first, last) = (
-            group.first().expect("a group holds ops"),
-            group.last().expect("a group holds ops"),
-        );
+        let (first, last) = (group.first().expect("a group holds ops"), group.last().expect("a group holds ops"));
         let (old_start, new_start) = (first.old_range().start, first.new_range().start);
         if old_start > at.0 {
-            out.push(Stretch::Folded(
-                (at.0..old_start)
-                    .zip(at.1..new_start)
-                    .map(|(old, new)| same(olds[old], old, new))
-                    .collect(),
-            ));
+            out.push(Stretch::Folded((at.0..old_start).zip(at.1..new_start).map(|(old, new)| same(olds[old], old, new)).collect()));
         }
         let (old_end, new_end) = (last.old_range().end, last.new_range().end);
         let mut lines = Vec::new();
@@ -98,28 +88,16 @@ pub fn diff(old: &str, new: &str, context: usize) -> Vec<Stretch> {
                     old: change.old_index().map(|ix| ix + 1),
                     new: change.new_index().map(|ix| ix + 1),
                     text: text.into(),
-                    words: if kind == LineKind::Same {
-                        Vec::new()
-                    } else {
-                        words
-                    },
+                    words: if kind == LineKind::Same { Vec::new() } else { words },
                 });
             }
         }
         let header = UnifiedHunkHeader::new(&group).to_string();
-        out.push(Stretch::Hunk {
-            header: header.into(),
-            lines,
-        });
+        out.push(Stretch::Hunk { header: header.into(), lines });
         at = (old_end, new_end);
     }
     if at.0 < olds.len() {
-        out.push(Stretch::Folded(
-            (at.0..olds.len())
-                .zip(at.1..news.len())
-                .map(|(old, new)| same(olds[old], old, new))
-                .collect(),
-        ));
+        out.push(Stretch::Folded((at.0..olds.len()).zip(at.1..news.len()).map(|(old, new)| same(olds[old], old, new)).collect()));
     }
     out
 }
@@ -127,12 +105,11 @@ pub fn diff(old: &str, new: &str, context: usize) -> Vec<Stretch> {
 /// Lines added and removed from `old` to `new`.
 pub fn stat(old: &str, new: &str) -> (usize, usize) {
     let diff = TextDiff::from_lines(old, new);
-    diff.iter_all_changes()
-        .fold((0, 0), |(added, removed), change| match change.tag() {
-            ChangeTag::Insert => (added + 1, removed),
-            ChangeTag::Delete => (added, removed + 1),
-            ChangeTag::Equal => (added, removed),
-        })
+    diff.iter_all_changes().fold((0, 0), |(added, removed), change| match change.tag() {
+        ChangeTag::Insert => (added + 1, removed),
+        ChangeTag::Delete => (added, removed + 1),
+        ChangeTag::Equal => (added, removed),
+    })
 }
 
 /// A hunk's rows side by side, as places in `lines`.
@@ -145,13 +122,7 @@ pub(crate) fn pair_places(lines: &[DiffLine]) -> Vec<(Option<usize>, Option<usiz
             ix += 1;
             continue;
         }
-        let run = |from: usize, kind| {
-            from..from
-                + lines[from..]
-                    .iter()
-                    .take_while(|line| line.kind == kind)
-                    .count()
-        };
+        let run = |from: usize, kind| from..from + lines[from..].iter().take_while(|line| line.kind == kind).count();
         let removed = run(ix, LineKind::Removed);
         let added = run(removed.end, LineKind::Added);
         ix = added.end;
@@ -165,10 +136,7 @@ pub(crate) fn pair_places(lines: &[DiffLine]) -> Vec<(Option<usize>, Option<usiz
 
 /// A hunk's lines side by side: removals beside following additions.
 pub fn pairs(lines: &[DiffLine]) -> Vec<(Option<&DiffLine>, Option<&DiffLine>)> {
-    pair_places(lines)
-        .into_iter()
-        .map(|(left, right)| (left.map(|ix| &lines[ix]), right.map(|ix| &lines[ix])))
-        .collect()
+    pair_places(lines).into_iter().map(|(left, right)| (left.map(|ix| &lines[ix]), right.map(|ix| &lines[ix]))).collect()
 }
 
 /// Marks words changed between each removal and its addition.
@@ -209,14 +177,8 @@ pub fn mark_words(lines: &mut [DiffLine]) {
 }
 
 /// A side-by-side row's numbers: old left, new right.
-pub(crate) fn side_numbers(
-    left: Option<&DiffLine>,
-    right: Option<&DiffLine>,
-) -> (Option<usize>, Option<usize>) {
-    (
-        left.and_then(|line| line.old),
-        right.and_then(|line| line.new),
-    )
+pub(crate) fn side_numbers(left: Option<&DiffLine>, right: Option<&DiffLine>) -> (Option<usize>, Option<usize>) {
+    (left.and_then(|line| line.old), right.and_then(|line| line.new))
 }
 
 #[cfg(test)]
@@ -241,9 +203,7 @@ mod tests {
     #[test]
     fn unchanged_lines_between_hunks_fold() {
         let old: String = (1..=20).map(|n| format!("{n}\n")).collect();
-        let new = old
-            .replacen("2\n", "two\n", 1)
-            .replace("19\n", "nineteen\n");
+        let new = old.replacen("2\n", "two\n", 1).replace("19\n", "nineteen\n");
         let stretches = diff(&old, &new, 1);
         let shape: Vec<&str> = stretches
             .iter()
@@ -253,9 +213,7 @@ mod tests {
             })
             .collect();
         assert_eq!(shape, ["hunk", "folded", "hunk"]);
-        let Stretch::Folded(hidden) = &stretches[1] else {
-            unreachable!()
-        };
+        let Stretch::Folded(hidden) = &stretches[1] else { unreachable!() };
         assert_eq!((hidden.len(), hidden[0].old), (14, Some(4)));
         assert_eq!(stat(&old, &new), (2, 2));
     }
@@ -270,22 +228,13 @@ mod tests {
                 Stretch::Folded(_) => None,
             })
             .expect("a hunk");
-        let sides: Vec<(bool, bool)> = pairs(lines)
-            .iter()
-            .map(|(left, right)| (left.is_some(), right.is_some()))
-            .collect();
+        let sides: Vec<(bool, bool)> = pairs(lines).iter().map(|(left, right)| (left.is_some(), right.is_some())).collect();
         assert_eq!(sides, [(true, true), (true, true), (false, true)]);
     }
 
     #[test]
     fn words_are_marked_on_lines_built_elsewhere() {
-        let line = |kind, text: &str| DiffLine {
-            kind,
-            old: None,
-            new: None,
-            text: text.to_string().into(),
-            words: Vec::new(),
-        };
+        let line = |kind, text: &str| DiffLine { kind, old: None, new: None, text: text.to_string().into(), words: Vec::new() };
         let mut lines = vec![
             line(LineKind::Removed, "let x = 1;"),
             line(LineKind::Removed, "abc"),
@@ -295,10 +244,7 @@ mod tests {
         mark_words(&mut lines);
         assert_eq!(&lines[0].text[lines[0].words[0].clone()], "1");
         assert_eq!(&lines[2].text[lines[2].words[0].clone()], "2");
-        assert!(
-            lines[1].words.is_empty() && lines[3].words.is_empty(),
-            "nothing shared"
-        );
+        assert!(lines[1].words.is_empty() && lines[3].words.is_empty(), "nothing shared");
     }
 
     #[test]
@@ -307,14 +253,8 @@ mod tests {
         let [Stretch::Hunk { lines, .. }] = stretches.as_slice() else {
             panic!("one hunk, not {stretches:?}");
         };
-        let numbers: Vec<_> = pairs(lines)
-            .into_iter()
-            .map(|(left, right)| side_numbers(left, right))
-            .collect();
-        assert_eq!(
-            numbers,
-            [(None, Some(1)), (Some(1), Some(2)), (Some(2), Some(3))]
-        );
+        let numbers: Vec<_> = pairs(lines).into_iter().map(|(left, right)| side_numbers(left, right)).collect();
+        assert_eq!(numbers, [(None, Some(1)), (Some(1), Some(2)), (Some(2), Some(3))]);
     }
 
     #[test]

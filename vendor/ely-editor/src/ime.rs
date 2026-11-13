@@ -87,16 +87,15 @@ impl CodeEditor {
             return None;
         }
         let (shown, measured) = self.measured(line, window, cx);
-        let column = measured.column(x - self.metrics.left);
+        let column = measured.column(x - self.text_left());
         Some(self.buffer.offset(line, shown.back(self.row_text(line), column)))
     }
 
     /// A line as drawn and laid out.
-    fn measured(&self, line: usize, window: &Window, cx: &Context<Self>) -> (Shown, Measured) {
+    pub(crate) fn measured(&self, line: usize, window: &Window, cx: &Context<Self>) -> (Shown, Measured) {
         let text = self.row_text(line);
-        let shown = Shown::new(text, self.notes(line, cx), self.styles(line, cx));
-        let family = self.code_font_family(cx);
-        let measured = Measured::new(&shown, family, self.metrics.size, self.metrics.advance, window);
+        let shown = Shown::new(text, self.notes(line, cx), self.styles(line, cx)).with_tabs(self.options.tab);
+        let measured = Measured::new(&shown, self.code_font(cx), self.metrics.size, self.metrics.advance, window);
         (shown, measured)
     }
 
@@ -181,7 +180,7 @@ impl EntityInputHandler for CodeEditor {
         let column = shown.column(text, self.buffer.point(range.start).1.min(text.len()));
         let metrics = self.metrics;
         let scrolled = -self.scroll.0.borrow().base_handle.offset().y;
-        let origin = point(metrics.left + measured.x(column), metrics.top + metrics.line * row as f32 - scrolled);
+        let origin = point(self.text_left() + measured.x(column), metrics.top + metrics.line * row as f32 - scrolled);
         let wide = measured.x(column + 1) - measured.x(column);
         Some(Bounds::new(origin, gpui::size(wide, metrics.line)))
     }

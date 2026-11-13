@@ -93,6 +93,8 @@ pub(crate) struct Shown {
     pub styles: Vec<(Range<usize>, HighlightStyle)>,
     /// Byte in the line, then bytes and characters set in before it.
     inserts: Vec<(usize, usize, usize)>,
+    /// Extra drawn columns after each tab's original shown column.
+    tabs: Vec<(usize, usize)>,
 }
 
 impl Shown {
@@ -111,10 +113,38 @@ impl Shown {
             last = at;
         }
         text.push_str(&line[last..]);
-        let mut shown = Self { text: text.into(), styles: Vec::new(), inserts };
+        let mut shown = Self { text: text.into(), styles: Vec::new(), inserts, tabs: Vec::new() };
         let mapped: Vec<(Range<usize>, HighlightStyle)> = styles.into_iter().map(|(range, style)| (shown.byte(range.start, false)..shown.byte(range.end, true), style)).collect();
         shown.styles = stack(mapped.into_iter().chain(own).collect());
         shown
+    }
+
+    /// Expands tabs once for both shaping and rendering, keeping source offsets reversible.
+    pub(crate) fn with_tabs(mut self, size: usize) -> Self {
+        if !self.text.contains('\t') {
+            return self;
+        }
+        let mut text = String::with_capacity(self.text.len());
+        let mut byte_map = Vec::new();
+        let mut column = 0;
+        for (original, (at, ch)) in self.text.char_indices().enumerate() {
+            if ch == '\t' {
+                let spaces = size - column % size;
+                text.extend(std::iter::repeat_n(' ', spaces));
+                self.tabs.push((original, spaces - 1));
+                byte_map.push((at, spaces - 1));
+                column += spaces;
+            } else {
+                text.push(ch);
+                column += 1;
+            }
+        }
+        let byte = |at: usize| at + byte_map.iter().filter(|(place, _)| *place < at).map(|(_, extra)| extra).sum::<usize>();
+        for (range, _) in &mut self.styles {
+            *range = byte(range.start)..byte(range.end);
+        }
+        self.text = text.into();
+        self
     }
 
     /// Where a byte of the line lands; a range's end lands before a note set in at it.
@@ -128,17 +158,36 @@ impl Shown {
     }
 
     /// Where a caret at column `column` of `line` draws, in columns; it sits before a note set in at it.
-    pub(crate) fn column(&self, line: &str, column: usize) -> usize {
+    fn noted_column(&self, line: &str, column: usize) -> usize {
         let byte = line.char_indices().nth(column).map_or(line.len(), |(at, _)| at);
         column + self.inserts.iter().filter(|(place, ..)| *place < byte).map(|(.., chars)| chars).sum::<usize>()
+    }
+
+    pub(crate) fn column(&self, line: &str, column: usize) -> usize {
+        let column = self.noted_column(line, column);
+        column + self.tabs.iter().filter(|(at, _)| *at < column).map(|(_, extra)| extra).sum::<usize>()
     }
 
     /// The column of the line under drawn column `shown`, skipping notes.
     pub(crate) fn back(&self, line: &str, shown: usize) -> usize {
         let mut column = shown;
+        let mut extra_before = 0;
+        for (at, extra) in &self.tabs {
+            let start = *at + extra_before;
+            let width = *extra + 1;
+            if shown > start && shown < start + width {
+                column = *at + usize::from((shown - start) * 2 >= width);
+                break;
+            }
+            if shown >= start + width {
+                column = column.saturating_sub(*extra);
+            }
+            extra_before += *extra;
+        }
+        let shown = column;
         for (place, _, chars) in &self.inserts {
             let at = line[..*place].chars().count();
-            let drawn = self.column(line, at);
+            let drawn = self.noted_column(line, at);
             if shown > drawn {
                 column = column.saturating_sub((shown - drawn).min(*chars));
             }

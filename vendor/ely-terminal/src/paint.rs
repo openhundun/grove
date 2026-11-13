@@ -1,18 +1,33 @@
-use std::{ops::Range, rc::Rc};
-
-use alacritty_terminal::vte::ansi::CursorShape;
-use gpui::{
-    BorderStyle, Bounds, ElementInputHandler, Entity, Font, FontStyle, FontWeight, Hsla,
-    IntoElement, Pixels, Size, StrikethroughStyle, Styled, TextAlign, TextRun, UnderlineStyle,
-    canvas, fill, outline, point, size,
-};
-
-use super::{
-    frame::{Frame, Lit, Style},
-    links::Target,
-    view::Terminal,
-};
+use super::frame::Frame;
+use super::frame::Lit;
+use super::frame::Style;
+use super::links::Target;
+use super::view::Terminal;
 use crate::primitives::caret_bar;
+use alacritty_terminal::vte::ansi::CursorShape;
+use gpui::BorderStyle;
+use gpui::Bounds;
+use gpui::ElementInputHandler;
+use gpui::Entity;
+use gpui::Font;
+use gpui::FontStyle;
+use gpui::FontWeight;
+use gpui::Hsla;
+use gpui::IntoElement;
+use gpui::Pixels;
+use gpui::Size;
+use gpui::StrikethroughStyle;
+use gpui::Styled;
+use gpui::TextAlign;
+use gpui::TextRun;
+use gpui::UnderlineStyle;
+use gpui::canvas;
+use gpui::fill;
+use gpui::outline;
+use gpui::point;
+use gpui::size;
+use std::ops::Range;
+use std::rc::Rc;
 
 /// How a terminal paints: font and cell, ink, and the colors of what it marks.
 pub(crate) struct Look {
@@ -32,27 +47,14 @@ pub(crate) struct Look {
 /// The face a style prints in.
 fn font(style: &Style, base: &Font) -> Font {
     Font {
-        weight: if style.bold {
-            FontWeight::BOLD
-        } else {
-            FontWeight::NORMAL
-        },
-        style: if style.italic {
-            FontStyle::Italic
-        } else {
-            FontStyle::Normal
-        },
+        weight: if style.bold { FontWeight((base.weight.0 + 300.0).min(FontWeight::BLACK.0)) } else { base.weight },
+        style: if style.italic { FontStyle::Italic } else { base.style },
         ..base.clone()
     }
 }
 
 /// The grid, fitted to its box: it tells the terminal its size and origin, then paints each row.
-pub(crate) fn grid(
-    terminal: Entity<Terminal>,
-    frame: Rc<Frame>,
-    hovered: Option<(usize, Range<usize>, Target)>,
-    look: Look,
-) -> impl IntoElement {
+pub(crate) fn grid(terminal: Entity<Terminal>, frame: Rc<Frame>, hovered: Option<(usize, Range<usize>, Target)>, look: Look) -> impl IntoElement {
     let (fit, typing) = (terminal.clone(), terminal);
     let cell = look.cell;
     canvas(
@@ -72,9 +74,7 @@ pub(crate) fn grid(
         move |bounds, _, window, cx| {
             let focus = typing.read(cx).focus.clone();
             window.handle_input(&focus, ElementInputHandler::new(bounds, typing.clone()), cx);
-            let at = |row: usize, column: usize| {
-                bounds.origin + point(cell.width * column as f32, cell.height * row as f32)
-            };
+            let at = |row: usize, column: usize| bounds.origin + point(cell.width * column as f32, cell.height * row as f32);
             for (ix, row) in frame.rows.iter().enumerate() {
                 let runs: Vec<TextRun> = row
                     .runs
@@ -84,31 +84,12 @@ pub(crate) fn grid(
                         font: font(style, &look.font),
                         color: style.fg,
                         background_color: style.bg,
-                        underline: style.underline.then_some(UnderlineStyle {
-                            thickness: look.rule,
-                            color: Some(style.fg),
-                            wavy: false,
-                        }),
-                        strikethrough: style.strike.then_some(StrikethroughStyle {
-                            thickness: look.rule,
-                            color: Some(style.fg),
-                        }),
+                        underline: style.underline.then_some(UnderlineStyle { thickness: look.rule, color: Some(style.fg), wavy: false }),
+                        strikethrough: style.strike.then_some(StrikethroughStyle { thickness: look.rule, color: Some(style.fg) }),
                     })
                     .collect();
-                let shaped = window.text_system().shape_line(
-                    row.text.clone().into(),
-                    look.size,
-                    &runs,
-                    Some(cell.width),
-                );
-                let ground = shaped.paint_background(
-                    at(ix, 0),
-                    cell.height,
-                    TextAlign::Left,
-                    None,
-                    window,
-                    cx,
-                );
+                let shaped = window.text_system().shape_line(row.text.clone().into(), look.size, &runs, Some(cell.width));
+                let ground = shaped.paint_background(at(ix, 0), cell.height, TextAlign::Left, None, window, cx);
                 if let Err(error) = ground {
                     log::error!("terminal: row {ix}'s ground failed to paint: {error:#}");
                 }
@@ -121,9 +102,7 @@ pub(crate) fn grid(
                     let extent = size(cell.width * columns.len() as f32, cell.height);
                     window.paint_quad(fill(Bounds::new(at(ix, columns.start), extent), wash));
                 }
-                if let Err(error) =
-                    shaped.paint(at(ix, 0), cell.height, TextAlign::Left, None, window, cx)
-                {
+                if let Err(error) = shaped.paint(at(ix, 0), cell.height, TextAlign::Left, None, window, cx) {
                     log::error!("terminal: row {ix} failed to paint: {error:#}");
                 }
                 for (column, cluster, style) in &row.clusters {
@@ -138,14 +117,7 @@ pub(crate) fn grid(
                     let painted = window
                         .text_system()
                         .shape_line(cluster.clone().into(), look.size, &[run], None)
-                        .paint(
-                            at(ix, *column),
-                            cell.height,
-                            TextAlign::Left,
-                            None,
-                            window,
-                            cx,
-                        );
+                        .paint(at(ix, *column), cell.height, TextAlign::Left, None, window, cx);
                     if let Err(error) = painted {
                         log::error!("terminal: a cluster in row {ix} failed to paint: {error:#}");
                     }
@@ -159,24 +131,17 @@ pub(crate) fn grid(
             if let Some((row, column, shape)) = frame.cursor {
                 let origin = at(row, column);
                 let quad = match (shape, look.focused) {
-                    (CursorShape::HollowBlock, _) | (_, false) => {
-                        outline(Bounds::new(origin, cell), look.caret, BorderStyle::Solid)
-                    }
+                    (CursorShape::HollowBlock, _) | (_, false) => outline(Bounds::new(origin, cell), look.caret, BorderStyle::Solid),
                     (CursorShape::Beam, true) => {
                         let scale = window.scale_factor();
                         let bar = caret_bar(origin, look.caret_width, cell.height, scale);
                         fill(bar, look.caret)
                     }
                     (CursorShape::Underline, true) => fill(
-                        Bounds::new(
-                            origin + point(Pixels::ZERO, cell.height - look.caret_width),
-                            size(cell.width, look.caret_width),
-                        ),
+                        Bounds::new(origin + point(Pixels::ZERO, cell.height - look.caret_width), size(cell.width, look.caret_width)),
                         look.caret,
                     ),
-                    (CursorShape::Block | CursorShape::Hidden, true) => {
-                        fill(Bounds::new(origin, cell), look.caret.opacity(0.45))
-                    }
+                    (CursorShape::Block | CursorShape::Hidden, true) => fill(Bounds::new(origin, cell), look.caret.opacity(0.45)),
                 };
                 window.paint_quad(quad);
             }

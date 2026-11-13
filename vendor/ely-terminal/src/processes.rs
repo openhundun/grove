@@ -1,15 +1,24 @@
+use crate::buttons::Button;
+use crate::buttons::ButtonVariant;
+use crate::tables::Cell;
+use crate::tables::Column;
+use crate::tables::DataTable;
+use crate::tables::Row;
+use crate::tables::SortKey;
+use crate::theme::ActiveTheme;
+use crate::theme::ControlSize;
+use crate::theme::TextSize;
+use crate::typography::format;
+use gpui::App;
+use gpui::ElementId;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::RenderOnce;
+use gpui::SharedString;
+use gpui::Styled;
+use gpui::Window;
+use gpui::div;
 use std::rc::Rc;
-
-use gpui::{
-    App, ElementId, IntoElement, ParentElement, RenderOnce, SharedString, Styled, Window, div,
-};
-
-use crate::{
-    buttons::{Button, ButtonVariant},
-    tables::{Cell, Column, DataTable, Row, SortKey},
-    theme::{ActiveTheme, ControlSize, TextSize},
-    typography::format,
-};
 
 /// A running process: its id, name and owner, and what it takes.
 #[derive(Clone, Debug, PartialEq)]
@@ -75,10 +84,7 @@ impl ProcessList {
     }
 
     /// Runs with the selected ids after a change.
-    pub fn on_select(
-        mut self,
-        handler: impl Fn(Vec<u32>, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_select(mut self, handler: impl Fn(Vec<u32>, &mut Window, &mut App) + 'static) -> Self {
         self.on_select = Some(Rc::new(handler));
         self
     }
@@ -100,10 +106,7 @@ impl RenderOnce for ProcessList {
             Column::new("pid", "PID").end(),
             Column::new("user", "User"),
             Column::new("cpu", "CPU").end().decimals(1).suffix(" %"),
-            Column::new("memory", "Memory")
-                .end()
-                .decimals(1)
-                .suffix(" MB"),
+            Column::new("memory", "Memory").end().decimals(1).suffix(" MB"),
         ];
         let rows: Vec<Row> = self
             .processes
@@ -121,20 +124,14 @@ impl RenderOnce for ProcessList {
                 )
             })
             .collect();
-        let pid =
-            |key: &SharedString| -> u32 { key.parse().expect("a process row is keyed by its pid") };
+        let pid = |key: &SharedString| -> u32 { key.parse().expect("a process row is keyed by its pid") };
         let table = DataTable::new((self.id.clone(), "table"), columns)
             .rows(rows)
             .query(self.query)
-            .sorts([SortKey {
-                column: "cpu".into(),
-                rising: false,
-            }])
+            .sorts([SortKey { column: "cpu".into(), rising: false }])
             .selected(self.selected.iter().map(|pid| pid.to_string()));
         let table = match self.on_select {
-            Some(on_select) => table.on_select(move |keys, window, cx| {
-                on_select(keys.iter().map(pid).collect(), window, cx)
-            }),
+            Some(on_select) => table.on_select(move |keys, window, cx| on_select(keys.iter().map(pid).collect(), window, cx)),
             None => table,
         };
         let chosen = self.selected.clone();
@@ -148,11 +145,12 @@ impl RenderOnce for ProcessList {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(div().flex_1().text_color(colors.fg_muted).child(format!(
-                        "{} · {:.1} % CPU",
-                        format::plural(self.processes.len() as u64, "process", "processes"),
-                        busy
-                    )))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_color(colors.fg_muted)
+                            .child(format!("{} · {:.1} % CPU", format::plural(self.processes.len() as u64, "process", "processes"), busy)),
+                    )
                     .children(self.on_end.map(|on_end| {
                         Button::new((self.id.clone(), "end"), "End process")
                             .variant(ButtonVariant::Danger)

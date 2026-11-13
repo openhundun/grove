@@ -1,15 +1,14 @@
-use alacritty_terminal::{
-    grid::Dimensions,
-    index::{Column, Direction, Point},
-    term::{
-        Term,
-        search::{Match, RegexIter, RegexSearch},
-    },
-};
-use gpui::Context;
-
 use super::view::Terminal;
 use crate::editor::FindOptions;
+use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::Column;
+use alacritty_terminal::index::Direction;
+use alacritty_terminal::index::Point;
+use alacritty_terminal::term::Term;
+use alacritty_terminal::term::search::Match;
+use alacritty_terminal::term::search::RegexIter;
+use alacritty_terminal::term::search::RegexSearch;
+use gpui::Context;
 
 /// A find's matches over the scrollback and the screen, and the one stepped to.
 #[derive(Default)]
@@ -26,16 +25,8 @@ impl Search {
 
 /// `query` under `options` as the grid's search reads it; word edges are ASCII, which its lazy DFA needs.
 fn pattern(query: &str, options: FindOptions) -> String {
-    let body = if options.regex {
-        query.to_string()
-    } else {
-        regex::escape(query)
-    };
-    let body = if options.word {
-        format!(r"(?-u:\b)(?:{body})(?-u:\b)")
-    } else {
-        body
-    };
+    let body = if options.regex { query.to_string() } else { regex::escape(query) };
+    let body = if options.word { format!(r"(?-u:\b)(?:{body})(?-u:\b)") } else { body };
     let case = if options.case { "(?-i)" } else { "(?i)" };
     format!("{case}{body}")
 }
@@ -50,22 +41,10 @@ fn search_all<T>(term: &Term<T>, pattern: &str) -> Result<Vec<Match>, String> {
 
 impl Terminal {
     /// Finds `query` in the scrollback and the screen and steps to the newest match; a bad pattern is an error to show.
-    pub fn find(
-        &mut self,
-        query: &str,
-        options: FindOptions,
-        cx: &mut Context<Self>,
-    ) -> Result<usize, String> {
-        let all = if query.is_empty() {
-            Vec::new()
-        } else {
-            search_all(&self.term.lock(), &pattern(query, options))?
-        };
+    pub fn find(&mut self, query: &str, options: FindOptions, cx: &mut Context<Self>) -> Result<usize, String> {
+        let all = if query.is_empty() { Vec::new() } else { search_all(&self.term.lock(), &pattern(query, options))? };
         log::debug!("terminal: {} matches of {query:?}", all.len());
-        self.search = Search {
-            current: all.len().checked_sub(1),
-            all,
-        };
+        self.search = Search { current: all.len().checked_sub(1), all };
         self.reveal(cx);
         Ok(self.search.all.len())
     }
@@ -76,11 +55,7 @@ impl Terminal {
         let Some(at) = self.search.current else {
             return;
         };
-        self.search.current = Some(if forward {
-            (at + 1) % count
-        } else {
-            (at + count - 1) % count
-        });
+        self.search.current = Some(if forward { (at + 1) % count } else { (at + count - 1) % count });
         self.reveal(cx);
     }
 
@@ -100,31 +75,19 @@ impl Terminal {
 
 #[cfg(test)]
 mod tests {
-    use alacritty_terminal::term::test::mock_term;
-
     use super::*;
+    use alacritty_terminal::term::test::mock_term;
 
     #[test]
     fn find_takes_case_words_and_patterns() {
         let term = mock_term("one two One\r\nthree phone one");
-        let count = |query: &str, options: FindOptions| {
-            search_all(&term, &pattern(query, options)).map(|all| all.len())
-        };
+        let count = |query: &str, options: FindOptions| search_all(&term, &pattern(query, options)).map(|all| all.len());
         assert_eq!(count("one", FindOptions::default()), Ok(4));
-        let case = FindOptions {
-            case: true,
-            ..FindOptions::default()
-        };
+        let case = FindOptions { case: true, ..FindOptions::default() };
         assert_eq!(count("One", case), Ok(1));
-        let word = FindOptions {
-            word: true,
-            ..FindOptions::default()
-        };
+        let word = FindOptions { word: true, ..FindOptions::default() };
         assert_eq!(count("one", word), Ok(3), "phone holds no whole word");
-        let regex = FindOptions {
-            regex: true,
-            ..FindOptions::default()
-        };
+        let regex = FindOptions { regex: true, ..FindOptions::default() };
         assert_eq!(count("t[wh]", regex), Ok(2));
         assert!(count("(", regex).is_err());
     }

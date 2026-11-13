@@ -1,18 +1,38 @@
+use crate::buttons::ButtonVariant;
+use crate::buttons::IconButton;
+use crate::i18n;
+use crate::navigation::Group;
+use crate::navigation::Palette;
+use crate::navigation::Row;
+use crate::navigation::fuzzy;
+use crate::navigation::marked;
+use crate::navigation::query_field;
+use crate::primitives::FocusRing;
+use crate::primitives::Icon;
+use crate::primitives::IconName;
+use crate::theme::ActiveTheme;
+use crate::theme::ControlSize;
+use crate::theme::IconSize;
+use crate::theme::Radius;
+use crate::theme::TextSize;
+use crate::typography::Ellipsis;
+use crate::typography::tabular;
+use gpui::AnyElement;
+use gpui::App;
+use gpui::ElementId;
+use gpui::FontWeight;
+use gpui::InteractiveElement;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::RenderOnce;
+use gpui::Role;
+use gpui::SharedString;
+use gpui::StatefulInteractiveElement;
+use gpui::Styled;
+use gpui::Window;
+use gpui::div;
+use gpui::prelude::*;
 use std::rc::Rc;
-
-use gpui::{
-    AnyElement, App, ElementId, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::*,
-};
-
-use crate::{
-    buttons::{ButtonVariant, IconButton},
-    i18n,
-    navigation::{Group, Palette, Row, fuzzy, marked, query_field},
-    primitives::{FocusRing, Icon, IconName},
-    theme::{ActiveTheme, ControlSize, IconSize, Radius, TextSize},
-    typography::{Ellipsis, tabular},
-};
 
 /// A branch, its upstream distance, and its last commit.
 #[derive(Clone, Debug, PartialEq)]
@@ -78,11 +98,7 @@ pub struct BranchSelector {
 
 impl BranchSelector {
     /// A palette under `id` of `branches`; `on_close` runs on Escape, a click outside, or a pick.
-    pub fn new(
-        id: impl Into<ElementId>,
-        branches: impl IntoIterator<Item = Branch>,
-        on_close: impl Fn(&mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn new(id: impl Into<ElementId>, branches: impl IntoIterator<Item = Branch>, on_close: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         Self {
             id: id.into(),
             branches: branches.into_iter().collect(),
@@ -93,19 +109,13 @@ impl BranchSelector {
     }
 
     /// Runs with the branch picked.
-    pub fn on_pick(
-        mut self,
-        handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_pick(mut self, handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static) -> Self {
         self.on_pick = Some(Rc::new(handler));
         self
     }
 
     /// Runs with the name typed for a new branch.
-    pub fn on_create(
-        mut self,
-        handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_create(mut self, handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static) -> Self {
         self.on_create = Some(Rc::new(handler));
         self
     }
@@ -113,12 +123,7 @@ impl BranchSelector {
 
 impl RenderOnce for BranchSelector {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let input = query_field(
-            &self.id,
-            i18n::text(cx, "palette.branch.placeholder", &[]),
-            window,
-            cx,
-        );
+        let input = query_field(&self.id, i18n::text(cx, "palette.branch.placeholder", &[]), window, cx);
         let query = input.read(cx).text().trim().to_string();
         let colors = cx.theme().colors.clone();
         let row = |branch: &Branch, cx: &App| -> Option<(i32, Row)> {
@@ -133,50 +138,25 @@ impl RenderOnce for BranchSelector {
                 Row {
                     value: branch.name.clone(),
                     name: branch.name.clone(),
-                    icon: Some(if branch.current {
-                        IconName::Check
-                    } else {
-                        IconName::GitBranch
-                    }),
+                    icon: Some(if branch.current { IconName::Check } else { IconName::GitBranch }),
                     label: marked(branch.name.clone(), hits, cx),
-                    detail: Some(
-                        div()
-                            .text_color(colors.fg_subtle)
-                            .child(branch.subject.clone())
-                            .into_any_element(),
-                    ),
-                    end: distance(branch).map(|text| {
-                        div()
-                            .text_color(colors.fg_subtle)
-                            .child(text)
-                            .into_any_element()
-                    }),
+                    detail: Some(div().text_color(colors.fg_subtle).child(branch.subject.clone()).into_any_element()),
+                    end: distance(branch).map(|text| div().text_color(colors.fg_subtle).child(text).into_any_element()),
                 },
             ))
         };
         let group = |title: SharedString, remote: bool, cx: &App| {
-            let mut rows: Vec<(i32, Row)> = self
-                .branches
-                .iter()
-                .filter(|branch| branch.remote == remote)
-                .filter_map(|branch| row(branch, cx))
-                .collect();
+            let mut rows: Vec<(i32, Row)> = self.branches.iter().filter(|branch| branch.remote == remote).filter_map(|branch| row(branch, cx)).collect();
             if !query.is_empty() {
                 rows.sort_by(|(a, _), (b, _)| b.cmp(a));
             }
-            Group {
-                title: Some(title),
-                rows: rows.into_iter().map(|(_, row)| row).collect(),
-            }
+            Group { title: Some(title), rows: rows.into_iter().map(|(_, row)| row).collect() }
         };
         let mut groups = vec![
             group(i18n::text(cx, "palette.branch.local", &[]), false, cx),
             group(i18n::text(cx, "palette.branch.remote", &[]), true, cx),
         ];
-        let named = self
-            .branches
-            .iter()
-            .any(|branch| branch.name.as_ref() == query);
+        let named = self.branches.iter().any(|branch| branch.name.as_ref() == query);
         if !query.is_empty() && !named {
             let create = i18n::text(cx, "palette.branch.create", &[("query", &query)]);
             groups.insert(
@@ -195,22 +175,18 @@ impl RenderOnce for BranchSelector {
             );
         }
         let (pick, create) = (self.on_pick, self.on_create);
-        let on_pick: OnName = Rc::new(
-            move |value: &SharedString, window: &mut Window, cx: &mut App| match value
-                .strip_prefix(CREATE)
-            {
-                Some(name) => {
-                    if let Some(create) = &create {
-                        create(&name.to_string().into(), window, cx)
-                    }
+        let on_pick: OnName = Rc::new(move |value: &SharedString, window: &mut Window, cx: &mut App| match value.strip_prefix(CREATE) {
+            Some(name) => {
+                if let Some(create) = &create {
+                    create(&name.to_string().into(), window, cx)
                 }
-                None => {
-                    if let Some(pick) = &pick {
-                        pick(value, window, cx)
-                    }
+            }
+            None => {
+                if let Some(pick) = &pick {
+                    pick(value, window, cx)
                 }
-            },
-        );
+            }
+        });
         Palette {
             id: self.id,
             input,
@@ -241,13 +217,7 @@ pub(super) struct Entry {
 }
 
 pub(super) fn listed(id: ElementId, entry: Entry, pick: Option<Pick>, cx: &App) -> AnyElement {
-    let Entry {
-        icon,
-        name,
-        detail,
-        trailing,
-        actions,
-    } = entry;
+    let Entry { icon, name, detail, trailing, actions } = entry;
     let theme = cx.theme();
     let colors = theme.colors.clone();
     div()
@@ -285,14 +255,7 @@ pub(super) fn listed(id: ElementId, entry: Entry, pick: Option<Pick>, cx: &App) 
                         .flex()
                         .items_center()
                         .gap_1()
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .whitespace_nowrap()
-                                .child(name),
-                        )
+                        .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().child(name))
                         .child(div().flex_none().flex().children(actions)),
                 )
                 .when(!detail.is_empty() || !trailing.is_empty(), |text| {
@@ -302,30 +265,19 @@ pub(super) fn listed(id: ElementId, entry: Entry, pick: Option<Pick>, cx: &App) 
                             .gap_2()
                             .text_color(colors.fg_subtle)
                             .child(div().flex_1().min_w_0().child(Ellipsis::new(detail)))
-                            .children(
-                                trailing
-                                    .into_iter()
-                                    .map(|words| tabular(div().flex_none()).child(words)),
-                            ),
+                            .children(trailing.into_iter().map(|words| tabular(div().flex_none()).child(words))),
                     )
                 }),
         )
         .into_any_element()
 }
 
-pub(super) fn action(
-    id: ElementId,
-    icon: IconName,
-    words: impl Into<SharedString>,
-    run: Option<Run>,
-) -> AnyElement {
+pub(super) fn action(id: ElementId, icon: IconName, words: impl Into<SharedString>, run: Option<Run>) -> AnyElement {
     IconButton::new(id, icon)
         .variant(ButtonVariant::Ghost)
         .size(ControlSize::Sm)
         .tooltip(words)
-        .when_some(run, |button, run| {
-            button.on_click(move |_, window, cx| run(window, cx))
-        })
+        .when_some(run, |button, run| button.on_click(move |_, window, cx| run(window, cx)))
         .into_any_element()
 }
 
@@ -375,28 +327,19 @@ impl BranchList {
     }
 
     /// A press on a row picks its branch.
-    pub fn on_pick(
-        mut self,
-        handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_pick(mut self, handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static) -> Self {
         self.on_pick = Some(Rc::new(handler));
         self
     }
 
     /// Runs with the branch to switch to.
-    pub fn on_switch(
-        mut self,
-        handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_switch(mut self, handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static) -> Self {
         self.on_switch = Some(Rc::new(handler));
         self
     }
 
     /// Runs with the branch to delete.
-    pub fn on_delete(
-        mut self,
-        handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_delete(mut self, handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static) -> Self {
         self.on_delete = Some(Rc::new(handler));
         self
     }
@@ -411,17 +354,14 @@ impl RenderOnce for BranchList {
             .iter()
             .map(|branch| {
                 let name = div()
-                    .when(branch.current, |name| {
-                        name.font_weight(FontWeight::SEMIBOLD)
-                    })
+                    .when(branch.current, |name| name.font_weight(FontWeight::SEMIBOLD))
                     .text_color(colors.fg)
                     .child(branch.name.clone())
                     .into_any_element();
                 let bind = |handler: &Option<OnName>| {
                     handler.clone().map(|handler| {
                         let name = branch.name.clone();
-                        Rc::new(move |window: &mut Window, cx: &mut App| handler(&name, window, cx))
-                            as Run
+                        Rc::new(move |window: &mut Window, cx: &mut App| handler(&name, window, cx)) as Run
                     })
                 };
                 // Only actions the owner handles are drawn.
@@ -429,18 +369,8 @@ impl RenderOnce for BranchList {
                     Vec::new()
                 } else {
                     [
-                        (
-                            "switch",
-                            IconName::ArrowRight,
-                            "palette.branch.switch",
-                            bind(&self.on_switch),
-                        ),
-                        (
-                            "delete",
-                            IconName::Trash2,
-                            "palette.branch.delete",
-                            bind(&self.on_delete),
-                        ),
+                        ("switch", IconName::ArrowRight, "palette.branch.switch", bind(&self.on_switch)),
+                        ("delete", IconName::Trash2, "palette.branch.delete", bind(&self.on_delete)),
                     ]
                     .into_iter()
                     .filter_map(|(key, icon, words, run)| {
@@ -450,38 +380,22 @@ impl RenderOnce for BranchList {
                     })
                     .collect()
                 };
-                let trailing: Vec<SharedString> = distance(branch)
-                    .into_iter()
-                    .map(SharedString::from)
-                    .chain([branch.when.clone()])
-                    .collect();
+                let trailing: Vec<SharedString> = distance(branch).into_iter().map(SharedString::from).chain([branch.when.clone()]).collect();
                 listed(
                     (self.id.clone(), format!("branch-{}", branch.name)).into(),
                     Entry {
-                        icon: if branch.current {
-                            IconName::Check
-                        } else {
-                            IconName::GitBranch
-                        },
+                        icon: if branch.current { IconName::Check } else { IconName::GitBranch },
                         name,
                         detail: branch.subject.clone(),
                         trailing,
                         actions,
                     },
-                    bind(&self.on_pick).map(|run| Pick {
-                        spoken: branch.name.clone(),
-                        selected: self.selected.as_ref() == Some(&branch.name),
-                        run,
-                    }),
+                    bind(&self.on_pick).map(|run| Pick { spoken: branch.name.clone(), selected: self.selected.as_ref() == Some(&branch.name), run }),
                     cx,
                 )
             })
             .collect();
-        div()
-            .flex()
-            .flex_col()
-            .text_size(theme.text_size(TextSize::Sm))
-            .children(rows)
+        div().flex().flex_col().text_size(theme.text_size(TextSize::Sm)).children(rows)
     }
 }
 

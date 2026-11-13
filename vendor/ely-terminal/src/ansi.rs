@@ -1,13 +1,27 @@
-use std::ops::{Index, Range};
-
-use gpui::{
-    App, FontStyle, FontWeight, HighlightStyle, IntoElement, ParentElement, RenderOnce,
-    SharedString, StrikethroughStyle, Styled, StyledText, UnderlineStyle, Window, div,
-};
-use vte::ansi::{Attr, Color, Handler, Processor, Rgb};
-
 use super::colors::Ink;
-use crate::theme::{ActiveTheme, TextSize};
+use crate::theme::ActiveTheme;
+use crate::theme::TextSize;
+use gpui::App;
+use gpui::FontStyle;
+use gpui::FontWeight;
+use gpui::HighlightStyle;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::RenderOnce;
+use gpui::SharedString;
+use gpui::StrikethroughStyle;
+use gpui::Styled;
+use gpui::StyledText;
+use gpui::UnderlineStyle;
+use gpui::Window;
+use gpui::div;
+use std::ops::Index;
+use std::ops::Range;
+use vte::ansi::Attr;
+use vte::ansi::Color;
+use vte::ansi::Handler;
+use vte::ansi::Processor;
+use vte::ansi::Rgb;
 
 /// How text prints after the escape codes so far.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -57,11 +71,7 @@ impl Handler for Printed {
             Attr::Bold => pen.bold = true,
             Attr::Dim => pen.dim = true,
             Attr::Italic => pen.italic = true,
-            Attr::Underline
-            | Attr::DoubleUnderline
-            | Attr::Undercurl
-            | Attr::DottedUnderline
-            | Attr::DashedUnderline => pen.underline = true,
+            Attr::Underline | Attr::DoubleUnderline | Attr::Undercurl | Attr::DottedUnderline | Attr::DashedUnderline => pen.underline = true,
             Attr::Reverse => pen.inverse = true,
             Attr::Strike => pen.strike = true,
             Attr::CancelBold => pen.bold = false,
@@ -72,12 +82,7 @@ impl Handler for Printed {
             Attr::CancelStrike => pen.strike = false,
             Attr::Foreground(color) => pen.fg = Some(color),
             Attr::Background(color) => pen.bg = Some(color),
-            Attr::BlinkSlow
-            | Attr::BlinkFast
-            | Attr::CancelBlink
-            | Attr::Hidden
-            | Attr::CancelHidden
-            | Attr::UnderlineColor(_) => {}
+            Attr::BlinkSlow | Attr::BlinkFast | Attr::CancelBlink | Attr::Hidden | Attr::CancelHidden | Attr::UnderlineColor(_) => {}
         }
     }
 }
@@ -104,8 +109,7 @@ impl Index<usize> for Unset {
 impl Pen {
     fn style(&self, ink: &Ink, rule: gpui::Pixels) -> HighlightStyle {
         let set = Unset;
-        let paint =
-            |color: Option<Color>, plain| color.map_or(plain, |color| ink.resolve(color, &set));
+        let paint = |color: Option<Color>, plain| color.map_or(plain, |color| ink.resolve(color, &set));
         let (mut fg, mut bg) = (paint(self.fg, ink.fg), paint(self.bg, ink.bg));
         if self.inverse {
             std::mem::swap(&mut fg, &mut bg);
@@ -118,15 +122,8 @@ impl Pen {
             background_color: (self.bg.is_some() || self.inverse).then_some(bg),
             font_weight: self.bold.then_some(FontWeight::BOLD),
             font_style: self.italic.then_some(FontStyle::Italic),
-            underline: self.underline.then_some(UnderlineStyle {
-                thickness: rule,
-                color: Some(fg),
-                wavy: false,
-            }),
-            strikethrough: self.strike.then_some(StrikethroughStyle {
-                thickness: rule,
-                color: Some(fg),
-            }),
+            underline: self.underline.then_some(UnderlineStyle { thickness: rule, color: Some(fg), wavy: false }),
+            strikethrough: self.strike.then_some(StrikethroughStyle { thickness: rule, color: Some(fg) }),
             ..HighlightStyle::default()
         }
     }
@@ -147,9 +144,7 @@ pub struct AnsiText {
 impl AnsiText {
     /// Text that prints `source`.
     pub fn new(source: impl Into<SharedString>) -> Self {
-        Self {
-            source: source.into(),
-        }
+        Self { source: source.into() }
     }
 }
 
@@ -159,10 +154,7 @@ impl RenderOnce for AnsiText {
         let ink = Ink::new(&theme.colors);
         let (text, spans) = printed(&self.source);
         let rule = theme.underline_thickness();
-        let styles: Vec<(Range<usize>, HighlightStyle)> = spans
-            .into_iter()
-            .map(|(range, pen)| (range, pen.style(&ink, rule)))
-            .collect();
+        let styles: Vec<(Range<usize>, HighlightStyle)> = spans.into_iter().map(|(range, pen)| (range, pen.style(&ink, rule))).collect();
         div()
             .font_family(theme.mono_family.clone())
             .text_size(theme.text_size(TextSize::Sm))
@@ -173,23 +165,15 @@ impl RenderOnce for AnsiText {
 
 #[cfg(test)]
 mod tests {
-    use vte::ansi::NamedColor;
-
     use super::*;
+    use vte::ansi::NamedColor;
 
     #[test]
     fn codes_become_pens_and_drop_out_of_the_text() {
         let (text, spans) = printed("\x1b[1;31merror\x1b[0m: bad\r\n\x1b[4mnext\x1b[24m ok");
         assert_eq!(text, "error: bad\nnext ok");
-        let red = Pen {
-            fg: Some(Color::Named(NamedColor::Red)),
-            bold: true,
-            ..Pen::default()
-        };
-        let under = Pen {
-            underline: true,
-            ..Pen::default()
-        };
+        let red = Pen { fg: Some(Color::Named(NamedColor::Red)), bold: true, ..Pen::default() };
+        let under = Pen { underline: true, ..Pen::default() };
         assert_eq!(spans, [(0..5, red), (11..15, under)]);
     }
 }

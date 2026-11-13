@@ -1,4 +1,7 @@
-//! Read-only Git CLI adapter. All arguments are structured; no shell or mutation command is exposed.
+//! 只读 Git CLI 适配器；参数结构化，不暴露 shell 或修改命令。
+//!
+//! 文本侧预览上限为 2 MiB。完整上下文 diff 的显示上限为 12 MiB，覆盖两侧文本、逐行前缀及元数据。
+//! Git 输出不截断；超限、二进制和不支持的冲突比较通过可见提示说明。
 use crate::fs;
 use grove_core::data::*;
 use grove_platform::git_path_bytes;
@@ -12,6 +15,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Output;
 use std::sync::Arc;
+
+const MAX_DIFF_BYTES: u64 = 6 * fs::MAX_TEXT_BYTES;
 
 fn output(path: &Path, argument_list: &[&OsStr]) -> Result<Output, String> {
     read_only_git_command(path).args(argument_list).output().map_err(|error| format!("git: {error}"))
@@ -378,34 +383,59 @@ pub fn file(root: &Path, path: &Path, revision: Option<Revision>, file: &Path) -
     let mut patch = None;
     let mut notice = None;
     if let Some(revision) = &revision {
-        let allowed = !matches!(&content, FileContent::Unavailable(message) if message.contains("2 MiB"));
-        if allowed {
-            let mut argument_list = diff_arguments(&path, revision)?;
-            argument_list.extend(["--patch".into(), "--unified=3".into(), "--".into()]);
-            let history = history(root, &path, revision.clone())?;
-            let old_path = history.file_list.iter().find(|change| change.path == file).and_then(|change| change.old_path.as_ref());
-            let mut tail_list = vec![file.as_os_str()];
-            if let Some(old_path) = old_path {
-                tail_list.push(old_path.as_os_str());
-            }
-            let raw = dynamic(&path, &argument_list, &tail_list)?;
-            if raw.len() as u64 > fs::MAX_TEXT_BYTES {
-                notice = Some("Diff exceeds the 2 MiB display limit".into());
-            } else if !raw.is_empty() {
-                match String::from_utf8(raw) {
-                    Ok(text) => patch = Some(Arc::from(text)),
-                    Err(_) => notice = Some("Patch contains non-UTF-8 text and cannot be displayed".into()),
-                }
-            } else if *revision == Revision::Unstaged {
-                let tracked = output(&path, &[OsStr::new("ls-files"), OsStr::new("--error-unmatch"), OsStr::new("--"), file.as_os_str()])?
-                    .status
-                    .success();
-                if !tracked && let FileContent::Text(source) = &content {
-                    patch = Some(Arc::from(added_patch(file, source)));
-                }
-            }
+        if matches!(content, FileContent::Binary) {
+            notice = Some("Binary or non-UTF-8 content cannot be displayed as a text diff.".into());
+        } else if matches!(&content, FileContent::Unavailable(message) if message.contains("2 MiB")) {
+            notice = Some("Full diff is not loaded for a file above the 2 MiB text preview limit.".into());
         } else {
-            notice = Some("Diff is not loaded for a file above the text preview limit".into());
+            let history = history(root, &path, revision.clone())?;
+            let change = history.file_list.iter().find(|change| change.path == file);
+            let unmerged = change.is_some_and(|change| change.status == 'U');
+            if unmerged && *revision == Revision::Staged {
+                notice = Some("The index is unmerged and has no staged text side. View Unstaged to compare our branch with the working file, or resolve and stage the conflict.".into());
+            } else {
+                let mut argument_list = diff_arguments(&path, revision)?;
+                argument_list.extend(["--patch".into(), "--unified=2147483647".into(), "--diff-merges=off".into()]);
+                if unmerged && *revision == Revision::Unstaged {
+                    argument_list.push("--ours".into());
+                }
+                argument_list.push("--".into());
+                let mut tail_list = vec![file.as_os_str()];
+                if let Some(old_path) = change.and_then(|change| change.old_path.as_ref()) {
+                    tail_list.push(old_path.as_os_str());
+                }
+                let raw = dynamic(&path, &argument_list, &tail_list)?;
+                if raw.len() as u64 > MAX_DIFF_BYTES {
+                    notice = Some("Full diff exceeds the 12 MiB display limit. Inspect this revision with a local Git diff tool.".into());
+                } else if raw.contains(&0)
+                    || raw
+                        .split(|byte| *byte == b'\n')
+                        .any(|line| (line.starts_with(b"Binary files ") && line.ends_with(b" differ")) || line == b"GIT binary patch")
+                {
+                    notice = Some("Binary content cannot be displayed as a text diff.".into());
+                } else if raw.split(|byte| *byte == b'\n').any(|line| line.starts_with(b"@@@")) {
+                    notice = Some("Combined conflict diffs are unsupported. Inspect the merge stages with a local Git tool, or resolve and stage the conflict.".into());
+                } else if unmerged && !raw.split(|byte| *byte == b'\n').any(|line| line.starts_with(b"@@ ")) {
+                    notice = Some("No text diff is available against our branch (index stage 2). Inspect the merge stages with a local Git tool, or resolve and stage the conflict.".into());
+                } else if !raw.is_empty() {
+                    match String::from_utf8(raw) {
+                        Ok(text) => {
+                            patch = Some(Arc::from(text));
+                            if unmerged {
+                                notice = Some("Conflict diff compares our branch (index stage 2) with the working file. Resolve and stage the conflict when ready.".into());
+                            }
+                        }
+                        Err(_) => notice = Some("Patch contains non-UTF-8 text and cannot be displayed".into()),
+                    }
+                } else if *revision == Revision::Unstaged {
+                    let tracked = output(&path, &[OsStr::new("ls-files"), OsStr::new("--error-unmatch"), OsStr::new("--"), file.as_os_str()])?
+                        .status
+                        .success();
+                    if !tracked && let FileContent::Text(source) = &content {
+                        patch = Some(Arc::from(added_patch(file, source)));
+                    }
+                }
+            }
         }
         if patch.is_some() && matches!(content, FileContent::Unavailable(_)) {
             content = FileContent::Unavailable("This revision has no readable text on the selected side; inspect the diff.".into());

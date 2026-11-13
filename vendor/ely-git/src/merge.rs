@@ -1,48 +1,54 @@
-use std::rc::Rc;
-
-use gpui::{
-    AnyElement, App, Div, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement,
-    ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    prelude::*, uniform_list,
-};
-
+use super::merging::MARKER;
+use super::merging::Region;
+use super::merging::RegionKind;
+use super::merging::Take;
+use super::merging::conflicts;
+use super::merging::resolve;
+use crate::buttons::Button;
+use crate::buttons::ButtonVariant;
+use crate::i18n;
+use crate::primitives::Icon;
+use crate::primitives::IconName;
+use crate::theme::ActiveTheme;
+use crate::theme::ControlSize;
+use crate::theme::IconSize;
+use crate::theme::Palette;
+use crate::theme::Radius;
+use crate::theme::TextSize;
+use gpui::AnyElement;
+use gpui::App;
+use gpui::Div;
+use gpui::ElementId;
+use gpui::FontWeight;
+use gpui::Hsla;
+use gpui::InteractiveElement;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::RenderOnce;
+use gpui::Role;
+use gpui::SharedString;
+use gpui::StatefulInteractiveElement;
+use gpui::Styled;
+use gpui::Window;
+use gpui::div;
+use gpui::prelude::*;
+use gpui::uniform_list;
 use similar::DiffableStr;
-
-use super::merging::{MARKER, Region, RegionKind, Take, conflicts, resolve};
-use crate::{
-    buttons::{Button, ButtonVariant},
-    i18n,
-    primitives::{Icon, IconName},
-    theme::{ActiveTheme, ControlSize, IconSize, Palette, Radius, TextSize},
-};
+use std::rc::Rc;
 
 type OnTake = Rc<dyn Fn(usize, Take, &mut Window, &mut App)>;
 type OnText = Rc<dyn Fn(String, &mut Window, &mut App)>;
 
 /// The three buttons that settle a conflict.
-fn takes(
-    id: &ElementId,
-    conflict: usize,
-    on_take: &Option<OnTake>,
-    words: [SharedString; 3],
-) -> Div {
+fn takes(id: &ElementId, conflict: usize, on_take: &Option<OnTake>, words: [SharedString; 3]) -> Div {
     let [ours, theirs, both] = words;
-    div().flex().gap_1().children(
-        [
-            (Take::Ours, ours),
-            (Take::Theirs, theirs),
-            (Take::Both, both),
-        ]
-        .map(|(take, words)| {
-            let on_take = on_take.clone();
-            Button::new((id.clone(), format!("take-{conflict}-{take:?}")), words)
-                .variant(ButtonVariant::Ghost)
-                .size(ControlSize::Sm)
-                .when_some(on_take, |button, on_take| {
-                    button.on_click(move |_, window, cx| on_take(conflict, take, window, cx))
-                })
-        }),
-    )
+    div().flex().gap_1().children([(Take::Ours, ours), (Take::Theirs, theirs), (Take::Both, both)].map(|(take, words)| {
+        let on_take = on_take.clone();
+        Button::new((id.clone(), format!("take-{conflict}-{take:?}")), words)
+            .variant(ButtonVariant::Ghost)
+            .size(ControlSize::Sm)
+            .when_some(on_take, |button, on_take| button.on_click(move |_, window, cx| on_take(conflict, take, window, cx)))
+    }))
 }
 
 /// Ours, base and theirs side by side, rows in view.
@@ -83,10 +89,7 @@ impl ThreeWayMerge {
     }
 
     /// Runs with a conflict's place and the side taken.
-    pub fn on_take(
-        mut self,
-        handler: impl Fn(usize, Take, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_take(mut self, handler: impl Fn(usize, Take, &mut Window, &mut App) + 'static) -> Self {
         self.on_take = Some(Rc::new(handler));
         self
     }
@@ -120,25 +123,9 @@ fn rows(regions: &[Region]) -> Vec<Line> {
             rows.push(Line::Conflict(conflict));
             conflict += 1;
         }
-        let count = region
-            .ours
-            .len()
-            .max(region.base.len())
-            .max(region.theirs.len());
-        let line = |side: &[String], ix: usize| {
-            side.get(ix)
-                .map(|line| line.trim_end_matches(['\r', '\n']).to_string())
-        };
-        rows.extend((0..count).map(|ix| {
-            Line::Code(
-                region.kind,
-                [
-                    line(&region.ours, ix),
-                    line(&region.base, ix),
-                    line(&region.theirs, ix),
-                ],
-            )
-        }));
+        let count = region.ours.len().max(region.base.len()).max(region.theirs.len());
+        let line = |side: &[String], ix: usize| side.get(ix).map(|line| line.trim_end_matches(['\r', '\n']).to_string());
+        rows.extend((0..count).map(|ix| Line::Code(region.kind, [line(&region.ours, ix), line(&region.base, ix), line(&region.theirs, ix)])));
     }
     rows
 }
@@ -149,57 +136,26 @@ impl RenderOnce for ThreeWayMerge {
         let colors = theme.colors.clone();
         let height = theme.control_height(ControlSize::Sm);
         let rows = Rc::new(rows(&self.regions));
-        let Self {
-            id,
-            labels,
-            takes: taken,
-            on_take,
-            ..
-        } = self;
+        let Self { id, labels, takes: taken, on_take, .. } = self;
         let header = div()
             .flex()
             .gap_px()
             .bg(colors.hover)
             .font_weight(FontWeight::MEDIUM)
             .text_color(colors.fg_muted)
-            .children(
-                labels
-                    .iter()
-                    .map(|label| div().flex_1().min_w_0().px_2().py_1().child(label.clone())),
-            );
+            .children(labels.iter().map(|label| div().flex_1().min_w_0().px_2().py_1().child(label.clone())));
         let list = uniform_list((id.clone(), "rows"), rows.len(), move |range, _, cx| {
             let colors = cx.theme().colors.clone();
             range
                 .map(|ix| {
-                    let row = div()
-                        .id((id.clone(), format!("row-{ix}")))
-                        .w_full()
-                        .h(height)
-                        .flex()
-                        .items_center();
+                    let row = div().id((id.clone(), format!("row-{ix}"))).w_full().h(height).flex().items_center();
                     match &rows[ix] {
                         Line::Conflict(at) => {
                             let said = match taken.get(*at).copied().flatten() {
-                                Some(take) => i18n::text(
-                                    cx,
-                                    "git.merge.took",
-                                    &[
-                                        ("n", &(at + 1).to_string()),
-                                        ("side", &i18n::text(cx, word(take), &[])),
-                                    ],
-                                ),
-                                None => i18n::text(
-                                    cx,
-                                    "git.merge.conflict",
-                                    &[("n", &(at + 1).to_string())],
-                                ),
+                                Some(take) => i18n::text(cx, "git.merge.took", &[("n", &(at + 1).to_string()), ("side", &i18n::text(cx, word(take), &[]))]),
+                                None => i18n::text(cx, "git.merge.conflict", &[("n", &(at + 1).to_string())]),
                             };
-                            let words = [
-                                "git.merge.take_ours",
-                                "git.merge.take_theirs",
-                                "git.merge.take_both",
-                            ]
-                            .map(|key| i18n::text(cx, key, &[]));
+                            let words = ["git.merge.take_ours", "git.merge.take_theirs", "git.merge.take_both"].map(|key| i18n::text(cx, key, &[]));
                             row.gap_2()
                                 .px_2()
                                 .role(Role::Heading)
@@ -207,11 +163,7 @@ impl RenderOnce for ThreeWayMerge {
                                 .border_b_1()
                                 .border_color(colors.border)
                                 .font_family(cx.theme().font_family.clone())
-                                .child(
-                                    Icon::new(IconName::TriangleAlert)
-                                        .size(IconSize::Sm)
-                                        .color(colors.warning),
-                                )
+                                .child(Icon::new(IconName::TriangleAlert).size(IconSize::Sm).color(colors.warning))
                                 .child(div().flex_1().text_color(colors.fg_muted).child(said))
                                 .child(takes(&id, *at, &on_take, words))
                                 .into_any_element()
@@ -219,13 +171,7 @@ impl RenderOnce for ThreeWayMerge {
                         Line::Code(kind, sides) => {
                             let washes = washes(*kind, &colors);
                             // Each side named by its label, for assistive tech.
-                            let said: Vec<String> = labels
-                                .iter()
-                                .zip(sides)
-                                .map(|(label, line)| {
-                                    format!("{label}: {}", line.as_deref().unwrap_or(""))
-                                })
-                                .collect();
+                            let said: Vec<String> = labels.iter().zip(sides).map(|(label, line)| format!("{label}: {}", line.as_deref().unwrap_or(""))).collect();
                             row.gap_px()
                                 .role(Role::Label)
                                 .aria_label(SharedString::from(said.join(" · ")))
@@ -298,11 +244,7 @@ pub struct ConflictResolver {
 impl ConflictResolver {
     /// A resolver under `id` of `text` with conflict markers.
     pub fn new(id: impl Into<ElementId>, text: impl Into<SharedString>) -> Self {
-        Self {
-            id: id.into(),
-            text: text.into(),
-            on_resolve: None,
-        }
+        Self { id: id.into(), text: text.into(), on_resolve: None }
     }
 
     /// Gets the whole text once a conflict settles.
@@ -319,13 +261,11 @@ impl RenderOnce for ConflictResolver {
         let found = conflicts(&self.text, MARKER);
         let text = self.text.to_string();
         let on_take: Option<OnTake> = self.on_resolve.map(|on_resolve| {
-            Rc::new(
-                move |ix: usize, take: Take, window: &mut Window, cx: &mut App| {
-                    if let Some(settled) = resolve(&text, ix, take, MARKER) {
-                        on_resolve(settled, window, cx)
-                    }
-                },
-            ) as OnTake
+            Rc::new(move |ix: usize, take: Take, window: &mut Window, cx: &mut App| {
+                if let Some(settled) = resolve(&text, ix, take, MARKER) {
+                    on_resolve(settled, window, cx)
+                }
+            }) as OnTake
         });
         let (current, incoming) = (colors.success.opacity(0.1), colors.info.opacity(0.1));
         let mut rows: Vec<AnyElement> = Vec::new();
@@ -337,12 +277,7 @@ impl RenderOnce for ConflictResolver {
                         &self.id,
                         at,
                         &on_take,
-                        [
-                            "git.merge.accept_current",
-                            "git.merge.accept_incoming",
-                            "git.merge.accept_both",
-                        ]
-                        .map(|key| i18n::text(cx, key, &[])),
+                        ["git.merge.accept_current", "git.merge.accept_incoming", "git.merge.accept_both"].map(|key| i18n::text(cx, key, &[])),
                     )
                     .py_0p5()
                     .font_family(theme.font_family.clone())
@@ -362,9 +297,7 @@ impl RenderOnce for ConflictResolver {
                     None
                 }
             });
-            let marker = found
-                .iter()
-                .any(|conflict| [conflict.start, conflict.middle, conflict.end].contains(&ix));
+            let marker = found.iter().any(|conflict| [conflict.start, conflict.middle, conflict.end].contains(&ix));
             rows.push(
                 div()
                     .px_2()

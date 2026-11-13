@@ -2,6 +2,7 @@ use super::chat::InlineChat;
 use super::gutter::Cell;
 use super::layout::CHAT_ROWS;
 use super::layout::Row;
+use super::layout::Shown;
 use super::state::CodeEditor;
 use super::state::EditorEvent;
 use crate::theme::ActiveTheme;
@@ -25,13 +26,16 @@ const FADED: f32 = 0.35;
 impl CodeEditor {
     /// Row `ix` as the list draws it.
     pub(crate) fn row(&self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let base = div().id(("editor-row", ix)).w_full().h(self.frame.line).flex();
+        let handle = self.scroll_handle();
+        // UniformList shifts the entire item. Undo that for the viewport and gutter;
+        // each code layer applies the shared offset inside its own fixed clip.
+        let base = div().id(("editor-row", ix)).absolute().left(-handle.offset().x).w(handle.bounds().size.width).h(self.frame.line).flex();
         let caret = self.buffer.line_of(self.primary().head);
         let base = match self.frame.rows[ix] {
             Row::Line(line) => base.debug_selector(move || format!("editor-line-{line}")),
             _ => base,
         };
-        match self.frame.rows[ix] {
+        let row = match self.frame.rows[ix] {
             Row::Line(line) if self.options.focus_line && line != caret => self.line_row(base.opacity(FADED), ix, line, window, cx),
             Row::Line(line) => self.line_row(base, ix, line, window, cx),
             Row::Lens(at) => self.lens_row(base, ix, at, cx),
@@ -39,7 +43,8 @@ impl CodeEditor {
             Row::Ghost(at) => self.ghost_row(base, ix, at, cx),
             Row::Chat(at) => self.chat_row(base, ix, at, cx),
             Row::Room => base.into_any_element(),
-        }
+        };
+        div().relative().w_full().min_w(self.content_width()).h(self.frame.line).child(row).into_any_element()
     }
 
     fn lens_row(&self, base: Stateful<gpui::Div>, ix: usize, at: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -86,43 +91,38 @@ impl CodeEditor {
 
     fn removed_row(&self, base: Stateful<gpui::Div>, ix: usize, hunk: usize, at: usize, cx: &mut Context<Self>) -> AnyElement {
         let colors = cx.theme().colors.clone();
-        let text = self.marks.hunks[hunk].removed[at].clone();
+        let shown = Shown::new(&self.marks.hunks[hunk].removed[at], Vec::new(), Vec::new()).with_tabs(self.options.tab);
         base.child(self.gutter(Cell::Removed, ix, cx))
             .child(
-                div()
-                    .flex_1()
-                    .h_full()
-                    .pl(self.frame.advance)
-                    .bg(colors.danger.opacity(0.08))
-                    .line_height(self.frame.line)
-                    .whitespace_nowrap()
-                    .text_color(colors.fg_muted)
-                    .child(text),
+                div().flex_1().min_w_0().h_full().overflow_hidden().bg(colors.danger.opacity(0.08)).child(
+                    div()
+                        .relative()
+                        .left(self.frame.advance + self.scroll_handle().offset().x)
+                        .w(self.content_width())
+                        .line_height(self.frame.line)
+                        .whitespace_nowrap()
+                        .text_color(colors.fg_muted)
+                        .child(StyledText::new(shown.text).with_highlights(shown.styles)),
+                ),
             )
             .into_any_element()
     }
 
     fn ghost_row(&self, base: Stateful<gpui::Div>, ix: usize, at: usize, cx: &mut Context<Self>) -> AnyElement {
         let colors = cx.theme().colors.clone();
-        let ghost = self.marks.ghost.as_ref().expect("a ghost row has its ghost");
-        let lines: Vec<&str> = ghost.text.split('\n').collect();
-        let text = lines[at].to_string();
-        let rest = (at + 1 == lines.len()).then(|| {
-            let line = self.buffer.line_of(ghost.offset);
-            let rest = self.buffer.text()[ghost.offset..self.buffer.line_range(line).end].to_string();
-            let styles = self.line_colors(&rest, cx);
-            StyledText::new(rest).with_highlights(styles)
-        });
+        let shown = self.ghost_shown(at, cx);
         base.child(self.gutter(Cell::Blank, ix, cx))
             .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .pl(self.frame.advance)
-                    .line_height(self.frame.line)
-                    .whitespace_nowrap()
-                    .child(div().italic().text_color(colors.fg_subtle).child(text))
-                    .children(rest),
+                div().flex_1().min_w_0().h_full().overflow_hidden().child(
+                    div()
+                        .relative()
+                        .left(self.frame.advance + self.scroll_handle().offset().x)
+                        .w(self.content_width())
+                        .line_height(self.frame.line)
+                        .whitespace_nowrap()
+                        .text_color(colors.syntax.variable)
+                        .child(StyledText::new(shown.text).with_highlights(shown.styles)),
+                ),
             )
             .into_any_element()
     }

@@ -1,5 +1,5 @@
 [package]
-description = "ELY editor pinned for immutable Grove previews."
+description  = "ELY editor pinned for immutable Grove previews."
 edition      = "2024"
 license      = "MIT"
 name         = "ely-editor"
@@ -8,7 +8,7 @@ rust-version = "1.98"
 version      = "0.2.0"
 
 [package.metadata.upstream]
-patch    = "Read-only previews have no user-facing unlock action; component font overrides."
+patch    = "Read-only previews hide the notice and unlock action; hidden insertion carets preserve selection and navigation without blink tasks; per-instance family, pixel size, weight and line-height builders plus live set_typography preserve text and selections, shape semantic highlights with the selected base weight, and invalidate typography-keyed extents; unwrapped two-axis scrolling shares one handle, fixes the gutter, and aligns caret reveal, selection and IME coordinates."
 revision = "01a2135e99bb52fb817b7b62198dbdd24022bcf8"
 
 [features]

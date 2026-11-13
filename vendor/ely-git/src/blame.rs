@@ -1,18 +1,30 @@
-use std::{ops::Range, rc::Rc};
-
-use gpui::{
-    App, ElementId, FontWeight, InteractiveElement, IntoElement, ParentElement, RenderOnce, Role,
-    SharedString, StatefulInteractiveElement, Styled, StyledText, Window, div, prelude::*,
-    relative, uniform_list,
-};
-
-use crate::{
-    data_display::Avatar,
-    editor::code_colors,
-    primitives::FocusRing,
-    theme::{ActiveTheme, AvatarSize, TextSize},
-    typography::{Ellipsis, LEADING},
-};
+use crate::data_display::Avatar;
+use crate::editor::code_colors;
+use crate::primitives::FocusRing;
+use crate::theme::ActiveTheme;
+use crate::theme::AvatarSize;
+use crate::theme::TextSize;
+use crate::typography::Ellipsis;
+use crate::typography::LEADING;
+use gpui::App;
+use gpui::ElementId;
+use gpui::FontWeight;
+use gpui::InteractiveElement;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::RenderOnce;
+use gpui::Role;
+use gpui::SharedString;
+use gpui::StatefulInteractiveElement;
+use gpui::Styled;
+use gpui::StyledText;
+use gpui::Window;
+use gpui::div;
+use gpui::prelude::*;
+use gpui::relative;
+use gpui::uniform_list;
+use std::ops::Range;
+use std::rc::Rc;
 
 /// Who last changed lines; age 0 newest, 1 oldest.
 #[derive(Clone, Debug, PartialEq)]
@@ -74,10 +86,7 @@ impl RenderOnce for GitBlameAnnotation {
             .pl_6()
             .whitespace_nowrap()
             .text_color(colors.fg_subtle)
-            .child(format!(
-                "{}, {} · {}",
-                self.blame.author, self.blame.when, self.blame.subject
-            ))
+            .child(format!("{}, {} · {}", self.blame.author, self.blame.when, self.blame.subject))
     }
 }
 
@@ -111,39 +120,16 @@ pub struct BlameView {
 
 impl BlameView {
     /// `owners`: each line's entry in `blames`.
-    pub fn new(
-        id: impl Into<ElementId>,
-        code: impl Into<SharedString>,
-        owners: impl IntoIterator<Item = usize>,
-        blames: impl IntoIterator<Item = Blame>,
-    ) -> Self {
+    pub fn new(id: impl Into<ElementId>, code: impl Into<SharedString>, owners: impl IntoIterator<Item = usize>, blames: impl IntoIterator<Item = Blame>) -> Self {
         let code: SharedString = code.into();
         let owners: Vec<usize> = owners.into_iter().collect();
         let blames: Vec<Blame> = blames.into_iter().collect();
         let lines = code.lines().count();
         if owners.len() != lines || owners.iter().any(|owner| *owner >= blames.len()) {
-            log::error!(
-                "blame view: {} owners for {lines} lines and {} blames; lines without one draw bare",
-                owners.len(),
-                blames.len()
-            );
+            log::error!("blame view: {} owners for {lines} lines and {} blames; lines without one draw bare", owners.len(), blames.len());
         }
-        let owners: Vec<Option<usize>> = (0..lines)
-            .map(|line| {
-                owners
-                    .get(line)
-                    .copied()
-                    .filter(|owner| *owner < blames.len())
-            })
-            .collect();
-        Self {
-            id: id.into(),
-            code,
-            owners,
-            blames,
-            current: None,
-            on_commit: None,
-        }
+        let owners: Vec<Option<usize>> = (0..lines).map(|line| owners.get(line).copied().filter(|owner| *owner < blames.len())).collect();
+        Self { id: id.into(), code, owners, blames, current: None, on_commit: None }
     }
 
     /// The line with the cursor, from zero.
@@ -153,10 +139,7 @@ impl BlameView {
     }
 
     /// Runs with the commit of the run pressed.
-    pub fn on_commit(
-        mut self,
-        handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_commit(mut self, handler: impl Fn(&SharedString, &mut Window, &mut App) + 'static) -> Self {
         self.on_commit = Some(Rc::new(handler));
         self
     }
@@ -170,24 +153,11 @@ impl RenderOnce for BlameView {
             .font_family(theme.mono_family.clone())
             .text_size(theme.text_size(TextSize::Xs))
             .text_color(theme.colors.fg);
-        let Self {
-            id,
-            code,
-            owners,
-            blames,
-            current,
-            on_commit,
-        } = self;
-        let lines: Rc<Vec<SharedString>> =
-            Rc::new(code.lines().map(|line| line.to_string().into()).collect());
+        let Self { id, code, owners, blames, current, on_commit } = self;
+        let lines: Rc<Vec<SharedString>> = Rc::new(code.lines().map(|line| line.to_string().into()).collect());
         let digits = lines.len().to_string().len();
         // Each line's owner, and whether it starts a run.
-        let heads: Rc<Vec<(Option<usize>, bool)>> = Rc::new(
-            runs(&owners)
-                .into_iter()
-                .flat_map(|(owner, span)| span.clone().map(move |line| (owner, line == span.start)))
-                .collect(),
-        );
+        let heads: Rc<Vec<(Option<usize>, bool)>> = Rc::new(runs(&owners).into_iter().flat_map(|(owner, span)| span.clone().map(move |line| (owner, line == span.start))).collect());
         let blames = Rc::new(blames);
         let list = uniform_list((id.clone(), "lines"), lines.len(), move |range, _, cx| {
             let theme = cx.theme();
@@ -196,9 +166,7 @@ impl RenderOnce for BlameView {
                 .map(|line| {
                     let (owner, head) = heads[line];
                     let blame = owner.map(|owner| blames[owner].clone());
-                    let fade = blame
-                        .as_ref()
-                        .map(|blame| 1.0 - blame.age.clamp(0.0, 1.0) * 0.8);
+                    let fade = blame.as_ref().map(|blame| 1.0 - blame.age.clamp(0.0, 1.0) * 0.8);
                     let gutter = div()
                         .id((id.clone(), format!("gutter-{line}")))
                         .flex_none()
@@ -209,9 +177,7 @@ impl RenderOnce for BlameView {
                         .gap_2()
                         .px_2()
                         .border_l_2()
-                        .border_color(
-                            fade.map_or(colors.border, |fade| colors.accent.opacity(fade)),
-                        )
+                        .border_color(fade.map_or(colors.border, |fade| colors.accent.opacity(fade)))
                         .font_family(theme.font_family.clone())
                         .text_size(theme.text_size(TextSize::Xs));
                     let gutter = match blame.clone().filter(|_| head) {
@@ -239,33 +205,10 @@ impl RenderOnce for BlameView {
                                         .hover(|gutter| gutter.bg(colors.hover))
                                         .on_click(move |_, window, cx| pick(&commit, window, cx))
                                 })
-                                .child(
-                                    Avatar::new(
-                                        (id.clone(), format!("author-{line}")),
-                                        blame.author.clone(),
-                                    )
-                                    .size(AvatarSize::Xs),
-                                )
-                                .child(
-                                    div()
-                                        .flex_none()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(colors.fg)
-                                        .child(blame.author.clone()),
-                                )
-                                .child(
-                                    div()
-                                        .flex_none()
-                                        .text_color(colors.fg_subtle)
-                                        .child(blame.when.clone()),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .text_color(colors.fg_muted)
-                                        .child(Ellipsis::new(blame.subject.clone())),
-                                )
+                                .child(Avatar::new((id.clone(), format!("author-{line}")), blame.author.clone()).size(AvatarSize::Xs))
+                                .child(div().flex_none().font_weight(FontWeight::MEDIUM).text_color(colors.fg).child(blame.author.clone()))
+                                .child(div().flex_none().text_color(colors.fg_subtle).child(blame.when.clone()))
+                                .child(div().flex_1().min_w_0().text_color(colors.fg_muted).child(Ellipsis::new(blame.subject.clone())))
                         }
                         None => gutter,
                     };
@@ -280,11 +223,7 @@ impl RenderOnce for BlameView {
                         .items_center()
                         .gap_3()
                         .border_t_1()
-                        .border_color(if head && line > 0 {
-                            colors.border
-                        } else {
-                            gpui::transparent_black()
-                        })
+                        .border_color(if head && line > 0 { colors.border } else { gpui::transparent_black() })
                         .whitespace_nowrap()
                         .line_height(relative(LEADING))
                         .when(current == Some(line), |row| row.bg(colors.hover))
@@ -298,9 +237,7 @@ impl RenderOnce for BlameView {
                                 .child((line + 1).to_string()),
                         )
                         .child(StyledText::new(text).with_highlights(styles))
-                        .when_some(blame.filter(|_| current == Some(line)), |row, blame| {
-                            row.child(GitBlameAnnotation::new(blame))
-                        })
+                        .when_some(blame.filter(|_| current == Some(line)), |row, blame| row.child(GitBlameAnnotation::new(blame)))
                 })
                 .collect()
         })
@@ -316,15 +253,7 @@ mod tests {
     #[test]
     fn lines_from_one_change_run_together() {
         let owned = [Some(0), Some(0), Some(1), None, None, Some(0)];
-        assert_eq!(
-            runs(&owned),
-            [
-                (Some(0), 0..2),
-                (Some(1), 2..3),
-                (None, 3..5),
-                (Some(0), 5..6)
-            ]
-        );
+        assert_eq!(runs(&owned), [(Some(0), 0..2), (Some(1), 2..3), (None, 3..5), (Some(0), 5..6)]);
         assert!(runs(&[]).is_empty());
     }
 }

@@ -11,12 +11,12 @@ version = "0.1.0"
 ely-core       = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components.git", rev = "01a2135e99bb52fb817b7b62198dbdd24022bcf8", default-features = false, features = ["fonts"] }
 ely-editor     = { path = "vendor/ely-editor" }
 ely-git        = { path = "vendor/ely-git" }
-ely-settings   = { git = "https://github.com/ELY-Open-Source/Ely-GPUI-Components.git", rev = "01a2135e99bb52fb817b7b62198dbdd24022bcf8" }
 ely-terminal   = { path = "vendor/ely-terminal" }
 gpui-kit       = { version = "=0.9.0" }
 grove-core     = { path = "source/grove-core" }
 grove-platform = { path = "source/grove-platform" }
 grove-runtime  = { path = "source/grove-runtime" }
+markdown       = { version = "=1.0.0" }
 rust-embed     = { version = "=8.13.0", features = ["include-exclude", "interpolate-folder-path", "debug-embed"] }
 serde_json     = { version = "=1.0.154" }
 
@@ -24,6 +24,6 @@ serde_json     = { version = "=1.0.154" }
 opt-level = 1
 
 [patch."https://github.com/ELY-Open-Source/Ely-GPUI-Components.git"]
-ely-editor = { path = "vendor/ely-editor" }
-ely-git    = { path = "vendor/ely-git" }
+ely-editor   = { path = "vendor/ely-editor" }
+ely-git      = { path = "vendor/ely-git" }
 ely-terminal = { path = "vendor/ely-terminal" }

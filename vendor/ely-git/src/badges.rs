@@ -1,15 +1,20 @@
-use gpui::{
-    App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce, Styled, Window,
-    div, prelude::*,
-};
-
-use crate::{
-    data_display::Badge,
-    lists::GitStatus,
-    primitives::Tooltip,
-    theme::{ActiveTheme, Radius, TextSize},
-    typography::tabular,
-};
+use crate::data_display::Badge;
+use crate::lists::GitStatus;
+use crate::primitives::Tooltip;
+use crate::theme::ActiveTheme;
+use crate::theme::Radius;
+use crate::theme::TextSize;
+use crate::typography::tabular;
+use gpui::App;
+use gpui::ElementId;
+use gpui::InteractiveElement;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::RenderOnce;
+use gpui::Styled;
+use gpui::Window;
+use gpui::div;
+use gpui::prelude::*;
 
 /// A file's git status as its letter in its tone; the word shows on hover.
 ///
@@ -28,10 +33,7 @@ pub struct GitStatusBadge {
 impl GitStatusBadge {
     /// A badge under `id` for `status`.
     pub fn new(id: impl Into<ElementId>, status: GitStatus) -> Self {
-        Self {
-            id: id.into(),
-            status,
-        }
+        Self { id: id.into(), status }
     }
 }
 
@@ -91,16 +93,8 @@ impl RenderOnce for DiffStat {
             .items_center()
             .gap_1p5()
             .text_size(theme.text_size(TextSize::Sm))
-            .child(tabular(
-                div()
-                    .text_color(colors.success)
-                    .child(format!("+{}", self.added)),
-            ))
-            .child(tabular(
-                div()
-                    .text_color(colors.danger)
-                    .child(format!("−{}", self.removed)),
-            ))
+            .child(tabular(div().text_color(colors.success).child(format!("+{}", self.added))))
+            .child(tabular(div().text_color(colors.danger).child(format!("−{}", self.removed))))
             .child(div().flex().gap_0p5().children((0..SQUARES).map(square)))
     }
 }

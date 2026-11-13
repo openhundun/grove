@@ -67,9 +67,7 @@ fn control(key: &str, alt: bool) -> Option<Vec<u8>> {
         "^" | "6" => 0x1e,
         "_" | "-" | "7" => 0x1f,
         "?" | "8" => 0x7f,
-        letter if letter.len() == 1 && letter.as_bytes()[0].is_ascii_lowercase() => {
-            letter.as_bytes()[0] - b'a' + 1
-        }
+        letter if letter.len() == 1 && letter.as_bytes()[0].is_ascii_lowercase() => letter.as_bytes()[0] - b'a' + 1,
         _ => return None,
     };
     Some(if alt { vec![0x1b, code] } else { vec![code] })
@@ -91,11 +89,7 @@ mod tests {
 
     fn sent(keys: &str, app_cursor: bool) -> Option<Vec<u8>> {
         bytes(
-            &Keystroke::parse_with_os(
-                keys,
-                ely_core::typography::keys::os(ely_core::theme::Platform::current()),
-            )
-            .expect("a keystroke"),
+            &Keystroke::parse_with_os(keys, ely_core::typography::keys::os(ely_core::theme::Platform::current())).expect("a keystroke"),
             app_cursor,
         )
     }
@@ -104,11 +98,7 @@ mod tests {
     fn keys_send_what_xterm_sends() {
         assert_eq!(sent("enter", false), Some(b"\r".to_vec()));
         assert_eq!(sent("up", false), Some(b"\x1b[A".to_vec()));
-        assert_eq!(
-            sent("up", true),
-            Some(b"\x1bOA".to_vec()),
-            "application cursor keys"
-        );
+        assert_eq!(sent("up", true), Some(b"\x1bOA".to_vec()), "application cursor keys");
         assert_eq!(sent("shift-up", true), Some(b"\x1b[1;2A".to_vec()));
         assert_eq!(sent("ctrl-c", false), Some(vec![3]));
         assert_eq!(sent("ctrl-alt-a", false), Some(vec![0x1b, 1]));
@@ -128,9 +118,6 @@ mod tests {
     #[test]
     fn pastes_bracket_when_asked() {
         assert_eq!(paste("a\nb", false), b"a\rb".to_vec());
-        assert_eq!(
-            paste("a\x1b[201~b", true),
-            b"\x1b[200~a[201~b\x1b[201~".to_vec()
-        );
+        assert_eq!(paste("a\x1b[201~b", true), b"\x1b[200~a[201~b\x1b[201~".to_vec());
     }
 }

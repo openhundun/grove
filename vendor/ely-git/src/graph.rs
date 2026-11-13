@@ -54,17 +54,9 @@ pub fn lanes<'a>(commits: impl IntoIterator<Item = (&'a str, &'a [&'a str])>) ->
             .filter_map(|(at, wait)| {
                 let wait = (*wait)?;
                 Some(if wait == id {
-                    Stroke {
-                        from: at,
-                        to: lane,
-                        half: Half::Top,
-                    }
+                    Stroke { from: at, to: lane, half: Half::Top }
                 } else {
-                    Stroke {
-                        from: at,
-                        to: at,
-                        half: Half::Through,
-                    }
+                    Stroke { from: at, to: at, half: Half::Through }
                 })
             })
             .collect();
@@ -84,21 +76,13 @@ pub fn lanes<'a>(commits: impl IntoIterator<Item = (&'a str, &'a [&'a str])>) ->
                     free
                 }
             };
-            strokes.push(Stroke {
-                from: lane,
-                to: target,
-                half: Half::Bottom,
-            });
+            strokes.push(Stroke { from: lane, to: target, half: Half::Bottom });
         }
         let width = before.len().max(waiting.len()).max(lane + 1);
         while waiting.last() == Some(&None) {
             waiting.pop();
         }
-        rows.push(GraphRow {
-            lane,
-            strokes,
-            width,
-        });
+        rows.push(GraphRow { lane, strokes, width });
     }
     rows
 }
@@ -115,43 +99,18 @@ mod tests {
     fn a_line_of_commits_keeps_one_lane() {
         let rows = lanes([("c", &["b"][..]), ("b", &["a"][..]), ("a", &[][..])]);
         assert!(rows.iter().all(|row| row.lane == 0 && row.width == 1));
-        assert_eq!(
-            rows[1].strokes,
-            [stroke(0, 0, Half::Top), stroke(0, 0, Half::Bottom)]
-        );
+        assert_eq!(rows[1].strokes, [stroke(0, 0, Half::Top), stroke(0, 0, Half::Bottom)]);
     }
 
     #[test]
     fn a_merge_opens_a_lane_and_the_branch_joins_back() {
         use Half::*;
-        let rows = lanes([
-            ("m", &["a", "b"][..]),
-            ("a", &["c"][..]),
-            ("b", &["c"][..]),
-            ("c", &[][..]),
-        ]);
+        let rows = lanes([("m", &["a", "b"][..]), ("a", &["c"][..]), ("b", &["c"][..]), ("c", &[][..])]);
         let lanes: Vec<usize> = rows.iter().map(|row| row.lane).collect();
         assert_eq!(lanes, [0, 0, 1, 0]);
-        assert_eq!(
-            rows[0].strokes,
-            [stroke(0, 0, Bottom), stroke(0, 1, Bottom)]
-        );
-        assert_eq!(
-            rows[1].strokes,
-            [
-                stroke(0, 0, Top),
-                stroke(1, 1, Through),
-                stroke(0, 0, Bottom)
-            ]
-        );
-        assert_eq!(
-            rows[2].strokes,
-            [
-                stroke(0, 0, Through),
-                stroke(1, 1, Top),
-                stroke(1, 0, Bottom)
-            ]
-        );
+        assert_eq!(rows[0].strokes, [stroke(0, 0, Bottom), stroke(0, 1, Bottom)]);
+        assert_eq!(rows[1].strokes, [stroke(0, 0, Top), stroke(1, 1, Through), stroke(0, 0, Bottom)]);
+        assert_eq!(rows[2].strokes, [stroke(0, 0, Through), stroke(1, 1, Top), stroke(1, 0, Bottom)]);
         assert_eq!(rows[3].strokes, [stroke(0, 0, Top)]);
         assert_eq!(rows[2].width, 2);
     }

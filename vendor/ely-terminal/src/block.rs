@@ -1,18 +1,34 @@
-use std::{rc::Rc, time::Duration};
-
-use gpui::{
-    App, ClipboardItem, ElementId, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::*,
-};
-
-use super::ansi::{AnsiText, printed};
-use crate::{
-    buttons::{ButtonVariant, IconButton},
-    motion::Spinner,
-    primitives::{Disclosure, Icon, IconName},
-    theme::{ActiveTheme, ControlSize, IconSize, Radius, TextSize},
-    typography::{DurationStyle, format},
-};
+use super::ansi::AnsiText;
+use super::ansi::printed;
+use crate::buttons::ButtonVariant;
+use crate::buttons::IconButton;
+use crate::motion::Spinner;
+use crate::primitives::Disclosure;
+use crate::primitives::Icon;
+use crate::primitives::IconName;
+use crate::theme::ActiveTheme;
+use crate::theme::ControlSize;
+use crate::theme::IconSize;
+use crate::theme::Radius;
+use crate::theme::TextSize;
+use crate::typography::DurationStyle;
+use crate::typography::format;
+use gpui::App;
+use gpui::ClipboardItem;
+use gpui::ElementId;
+use gpui::FontWeight;
+use gpui::InteractiveElement;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::RenderOnce;
+use gpui::SharedString;
+use gpui::StatefulInteractiveElement;
+use gpui::Styled;
+use gpui::Window;
+use gpui::div;
+use gpui::prelude::*;
+use std::rc::Rc;
+use std::time::Duration;
 
 /// Where a command stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,13 +76,7 @@ pub struct CommandBlock {
 
 impl CommandBlock {
     /// `output` as printed, escape codes and all.
-    pub fn new(
-        id: impl Into<ElementId>,
-        cwd: impl Into<SharedString>,
-        command: impl Into<SharedString>,
-        output: impl Into<SharedString>,
-        state: CommandState,
-    ) -> Self {
+    pub fn new(id: impl Into<ElementId>, cwd: impl Into<SharedString>, command: impl Into<SharedString>, output: impl Into<SharedString>, state: CommandState) -> Self {
         Self {
             id: id.into(),
             cwd: cwd.into(),
@@ -103,29 +113,14 @@ impl RenderOnce for CommandBlock {
         let theme = cx.theme();
         let colors = theme.colors.clone();
         let (mark, outcome): (gpui::AnyElement, SharedString) = match self.state {
-            CommandState::Running => (
-                Spinner::new((self.id.clone(), "spinner"))
-                    .size(IconSize::Sm)
-                    .into_any_element(),
-                "Running".into(),
-            ),
+            CommandState::Running => (Spinner::new((self.id.clone(), "spinner")).size(IconSize::Sm).into_any_element(), "Running".into()),
             CommandState::Done { code: 0, took } => (
-                Icon::new(IconName::CircleCheck)
-                    .size(IconSize::Sm)
-                    .color(colors.success)
-                    .into_any_element(),
+                Icon::new(IconName::CircleCheck).size(IconSize::Sm).color(colors.success).into_any_element(),
                 format::duration(took.as_secs().max(1), DurationStyle::Compact).into(),
             ),
             CommandState::Done { code, took } => (
-                Icon::new(IconName::CircleX)
-                    .size(IconSize::Sm)
-                    .color(colors.danger)
-                    .into_any_element(),
-                format!(
-                    "Exit {code} · {}",
-                    format::duration(took.as_secs().max(1), DurationStyle::Compact)
-                )
-                .into(),
+                Icon::new(IconName::CircleX).size(IconSize::Sm).color(colors.danger).into_any_element(),
+                format!("Exit {code} · {}", format::duration(took.as_secs().max(1), DurationStyle::Compact)).into(),
             ),
         };
         let copy = |key: &'static str, icon, words: &'static str, text: String| {
@@ -177,18 +172,8 @@ impl RenderOnce for CommandBlock {
                             .child(div().text_color(colors.fg_subtle).child(self.cwd)),
                     )
                     .child(div().text_color(colors.fg_muted).child(outcome))
-                    .child(copy(
-                        "copy-command",
-                        IconName::Copy,
-                        "Copy command",
-                        self.command.to_string(),
-                    ))
-                    .child(copy(
-                        "copy-output",
-                        IconName::FileText,
-                        "Copy output",
-                        plain,
-                    ))
+                    .child(copy("copy-command", IconName::Copy, "Copy command", self.command.to_string()))
+                    .child(copy("copy-output", IconName::FileText, "Copy output", plain))
                     .children(self.on_rerun.map(|rerun| {
                         IconButton::new((self.id.clone(), "rerun"), IconName::RotateCcw)
                             .variant(ButtonVariant::Ghost)
@@ -201,15 +186,11 @@ impl RenderOnce for CommandBlock {
                             div()
                                 .id((self.id.clone(), "fold"))
                                 .cursor_pointer()
-                                .when_some(fold, |toggle, fold| {
-                                    toggle.on_click(move |_, window, cx| fold(!folded, window, cx))
-                                })
+                                .when_some(fold, |toggle, fold| toggle.on_click(move |_, window, cx| fold(!folded, window, cx)))
                                 .child(Disclosure::new((self.id.clone(), "chevron"), !folded)),
                         )
                     }),
             )
-            .when(has_output && !folded, |block| {
-                block.child(div().pl_6().child(AnsiText::new(self.output)))
-            })
+            .when(has_output && !folded, |block| block.child(div().pl_6().child(AnsiText::new(self.output))))
     }
 }
