@@ -18,9 +18,25 @@ fn replayed_output_shows_without_its_codes(cx: &mut TestAppContext) {
     let (terminal, cx) = replayed(b"\x1b[32mok\x1b[0m done\r\n\x1b]0;build\x07next", cx);
     terminal.read_with(cx, |terminal, _| {
         assert_eq!(terminal.text(), "ok done\nnext");
-        assert_eq!(terminal.title().as_ref(), "build", "OSC 0 names it");
+        assert_eq!(terminal.title().map(|title| title.as_ref()), Some("build"), "OSC 0 names it");
         assert_eq!(terminal.shown.cursor, None, "a replay shows no cursor");
     });
+}
+
+#[gpui::test]
+fn osc_terminal_is_a_real_title_and_reset_clears_it(cx: &mut TestAppContext) {
+    use alacritty_terminal::vte::ansi::Handler as _;
+    let (terminal, cx) = replayed(b"\x1b]0;Terminal\x07", cx);
+    terminal.read_with(cx, |terminal, _| assert_eq!(terminal.title().map(|title| title.as_ref()), Some("Terminal")));
+    terminal.update(cx, |terminal, _| terminal.term.lock().set_title(None));
+    cx.run_until_parked();
+    terminal.read_with(cx, |terminal, _| assert_eq!(terminal.title(), None));
+}
+
+#[gpui::test]
+fn empty_osc_title_returns_to_automatic(cx: &mut TestAppContext) {
+    let (terminal, cx) = replayed(b"\x1b]0;build\x07\x1b]0;\x07", cx);
+    terminal.read_with(cx, |terminal, _| assert_eq!(terminal.title(), None));
 }
 
 #[gpui::test]
@@ -143,7 +159,7 @@ fn a_pixel_size_query_of_a_wide_grid_answers(cx: &mut TestAppContext) {
     for columns in [80, 8192] {
         let terminal = cx.new(|cx| Terminal::replay(b"\x1b[14t", columns, 1, cx));
         cx.run_until_parked();
-        terminal.read_with(cx, |terminal, _| assert_eq!(terminal.title().as_ref(), "Output"));
+        terminal.read_with(cx, |terminal, _| assert_eq!(terminal.title(), None));
     }
 }
 

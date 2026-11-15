@@ -6,7 +6,6 @@ use crate::settings::FontTarget;
 use crate::settings::PanelViewMode;
 use crate::settings::Typography;
 use crate::terminal_session::Session;
-use crate::terminal_session::SessionKey;
 use crate::workspace_state::DockMode;
 use crate::workspace_state::FileSelection;
 use crate::workspace_state::HistorySelection;
@@ -61,12 +60,10 @@ const META: u32 = 0x86868b;
 const BORDER: u32 = 0xe8e8ed;
 const ACCENT: u32 = 0x0071e3;
 const SELECT: u32 = 0xeaf2fd;
-const TITLE_HEIGHT: f32 = 34.;
-const RAIL_WIDTH: f32 = 28.;
-const STATUS_HEIGHT: f32 = 28.;
-const SESSION_LIST: [&str; 3] = ["Workspace", "Worktree", "Shell 2"];
+/// Every full-height chrome strip: the window title bar, the mode rail column, panel headers, and the status bar.
+const CHROME: f32 = 28.;
 
-actions!(grove, [ChangesMode, FilesMode, TerminalMode, HistoryMode, ToggleDock]);
+actions!(grove, [ChangesMode, FilesMode, TerminalMode, HistoryMode, ToggleDock, NewTerminal]);
 #[derive(Clone, Copy)]
 enum DragAxis {
     Column,
@@ -78,6 +75,7 @@ enum SearchPanel {
     Repositories,
     Changes,
     Files,
+    Sessions,
 }
 
 impl SearchPanel {
@@ -86,6 +84,7 @@ impl SearchPanel {
             Self::Repositories => 0,
             Self::Changes => 1,
             Self::Files => 2,
+            Self::Sessions => 3,
         }
     }
 }
@@ -96,16 +95,17 @@ enum RefreshTarget {
     Worktree,
     History,
     File,
-    Terminal,
 }
 
 type FileKey = (Option<Revision>, PathBuf);
 struct FileView {
     data: FileData,
     editor: Option<Entity<CodeEditor>>,
+    _editor_observation: Option<Subscription>,
     diff: Option<Rc<Vec<Stretch>>>,
     diff_open: HashSet<usize>,
     diff_scroll: DiffScrollHandle,
+    markdown_preview: bool,
     error: Option<String>,
     hydrated: bool,
 }
@@ -135,9 +135,10 @@ struct WorkspaceView {
     repo_scroll: ScrollHandle,
     commit_scroll: ScrollHandle,
     file_scroll: ScrollHandle,
-    search_input_list: [Option<Entity<TextInput>>; 3],
+    search_input_list: [Option<Entity<TextInput>>; 4],
     search_subscription_list: Vec<Subscription>,
-    session_map: HashMap<SessionKey, Session>,
+    session_list: Vec<Session>,
+    next_session_id: usize,
     terminal_focus: bool,
 }
 impl WorkspaceView {
@@ -169,9 +170,10 @@ impl WorkspaceView {
             repo_scroll: ScrollHandle::new(),
             commit_scroll: ScrollHandle::new(),
             file_scroll: ScrollHandle::new(),
-            search_input_list: [None, None, None],
+            search_input_list: [None, None, None, None],
             search_subscription_list: Vec::new(),
-            session_map: HashMap::new(),
+            session_list: Vec::new(),
+            next_session_id: 0,
             terminal_focus: false,
         }
     }
@@ -184,16 +186,6 @@ impl WorkspaceView {
             HistorySelection::Staged => Some(Revision::Staged),
             HistorySelection::Commit(index) => Some(Revision::Commit(self.worktree_data.as_ref()?.commit_list.get(index)?.oid.clone())),
             HistorySelection::Comparison => Some(Revision::Comparison(self.worktree_data.as_ref()?.base_ref_list.get(self.state.base)?.clone())),
-        }
-    }
-    fn session_key(&self, slot: usize) -> SessionKey {
-        SessionKey {
-            cwd: if slot == 0 {
-                self.root.clone()
-            } else {
-                self.selected_worktree.clone().unwrap_or_else(|| self.root.clone())
-            },
-            slot,
         }
     }
 }
@@ -219,6 +211,8 @@ pub struct Grove {
     settings_panel: Entity<settings::SettingsPanel>,
     _settings_subscription: Subscription,
     settings_open: bool,
+    memory_bytes: Option<u64>,
+    _memory_task: Option<Task<()>>,
 }
 impl Grove {
     pub fn new(root_list: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -253,8 +247,28 @@ impl Grove {
             settings_panel,
             _settings_subscription: settings_subscription,
             settings_open: false,
+            memory_bytes: grove_platform::resident_memory_bytes(),
+            _memory_task: None,
         };
         this.apply_ui_theme(cx);
+        let executor = cx.background_executor().clone();
+        this._memory_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                executor.timer(std::time::Duration::from_secs(2)).await;
+                let memory_bytes = grove_platform::resident_memory_bytes();
+                if this
+                    .update(cx, |this, cx| {
+                        if this.memory_bytes != memory_bytes {
+                            this.memory_bytes = memory_bytes;
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }));
         for index in 0..this.workspace_list.len() {
             this.refresh(index, cx);
         }
@@ -291,7 +305,7 @@ impl Grove {
             }
             FontTarget::Terminal => {
                 for view in &self.workspace_list {
-                    for session in view.session_map.values() {
+                    for session in &view.session_list {
                         if let Some(terminal) = &session.terminal {
                             terminal.update(cx, |terminal, cx| {
                                 terminal.set_typography(value.font_family.clone(), value.font_size, FontWeight(value.font_weight as f32), value.line_height, cx)
@@ -368,6 +382,29 @@ impl Grove {
         if matches!(file.diff.as_ref().and_then(|diff| diff.get(stretch)), Some(Stretch::Folded(_))) && file.diff_open.insert(stretch) {
             cx.notify();
         }
+    }
+
+    fn close_diff_context(&mut self, workspace_id: usize, key: &FileKey, stretch: usize, cx: &mut Context<Self>) {
+        let Some(workspace) = workspace_index(&self.workspace_list, workspace_id) else {
+            return;
+        };
+        let view = &mut self.workspace_list[workspace];
+        if !matches!(view.file_map.get(key).and_then(|file| file.diff.as_ref()).and_then(|diff| diff.get(stretch)), Some(Stretch::Folded(_))) {
+            return;
+        }
+        if view.state.diff_full {
+            for file in view.file_map.values_mut() {
+                if let Some(diff) = &file.diff {
+                    file.diff_open
+                        .extend(diff.iter().enumerate().filter_map(|(index, part)| matches!(part, Stretch::Folded(_)).then_some(index)));
+                }
+            }
+            view.state.diff_full = false;
+        }
+        if let Some(file) = view.file_map.get_mut(key) {
+            file.diff_open.remove(&stretch);
+        }
+        cx.notify();
     }
 
     fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -461,7 +498,7 @@ impl Grove {
         let root = self.workspace_list[index].root.clone();
         self.request(index, ReadRequest::Discover { root }, cx);
     }
-    fn refresh_panel(&mut self, target: RefreshTarget, window: &mut Window, cx: &mut Context<Self>) {
+    fn refresh_panel(&mut self, target: RefreshTarget, _: &mut Window, cx: &mut Context<Self>) {
         let index = self.active;
         match target {
             RefreshTarget::Repositories => self.refresh(index, cx),
@@ -489,15 +526,6 @@ impl Grove {
                     view.file_map.remove(key);
                 }
                 self.load_file(index, cx);
-            }
-            RefreshTarget::Terminal => {
-                let view = &mut self.workspace_list[index];
-                view.terminal_focus = true;
-                let key = view.session_key(view.state.session);
-                if let Some(terminal) = view.session_map.get(&key).and_then(|session| session.terminal.as_ref()) {
-                    terminal.update(cx, |_, cx| cx.notify());
-                }
-                window.refresh();
             }
         }
         cx.notify();
@@ -559,7 +587,7 @@ impl Grove {
                 if view.state.base >= data.base_ref_list.len() {
                     view.state.base = 0;
                 }
-                view.files_tree = file::FileTree::from_paths(data.file_list.iter().map(|path| path.as_path()));
+                view.files_tree = file::FileTree::from_paths(&data.path, data.file_list.iter().map(|path| path.as_path()));
                 view.worktree_data = Some(data);
                 view.graph_list = grove_core::commit_graph::project(&view.worktree_data.as_ref().unwrap().commit_list);
                 self.load_history(index, cx);
@@ -574,7 +602,10 @@ impl Grove {
                 if !matches!(view.state.file, FileSelection::Message) {
                     view.state.file = FileSelection::File(selected);
                 }
-                view.changes_tree = file::FileTree::from_paths(data.file_list.iter().map(|file| file.path.as_path()));
+                let Some(worktree) = view.selected_worktree.as_deref() else {
+                    return;
+                };
+                view.changes_tree = file::FileTree::from_paths(worktree, data.file_list.iter().map(|file| file.path.as_path()));
                 view.history_data = Some(data);
                 self.load_file(index, cx);
             }
@@ -586,9 +617,11 @@ impl Grove {
                         FileView {
                             data,
                             editor: None,
+                            _editor_observation: None,
                             diff: None,
                             diff_open: HashSet::new(),
                             diff_scroll: DiffScrollHandle::default(),
+                            markdown_preview: false,
                             error: None,
                             hydrated: false,
                         },
@@ -721,9 +754,15 @@ impl Grove {
         if view.state.mode == Mode::Files {
             view.state.fs_file = index;
             view.selected_fs_file = view.worktree_data.as_ref().and_then(|data| data.file_list.get(index)).cloned();
+            if let Some(path) = &view.selected_fs_file {
+                view.files_tree.reveal_file(path, &mut view.state.files_panel);
+            }
         } else {
             view.state.file = FileSelection::File(index);
             view.selected_file = view.history_data.as_ref().and_then(|data| data.file_list.get(index)).map(|file| file.path.clone());
+            if let Some(path) = &view.selected_file {
+                view.changes_tree.reveal_file(path, &mut view.state.changes_panel);
+            }
         }
         self.load_file(self.active, cx);
         cx.notify();
@@ -733,6 +772,7 @@ impl Grove {
             (SearchPanel::Repositories, "Search Repositories"),
             (SearchPanel::Changes, "Search Changes"),
             (SearchPanel::Files, "Search Files"),
+            (SearchPanel::Sessions, "Search Sessions"),
         ] {
             if self.view().search_input_list[panel.index()].is_some() {
                 continue;
@@ -752,6 +792,7 @@ impl Grove {
                     SearchPanel::Repositories => &mut state.repository_panel,
                     SearchPanel::Changes => &mut state.changes_panel,
                     SearchPanel::Files => &mut state.files_panel,
+                    SearchPanel::Sessions => &mut state.sessions_panel,
                 };
                 panel.query = query;
                 cx.notify();
@@ -760,18 +801,7 @@ impl Grove {
             view.search_input_list[panel.index()] = Some(input);
             view.search_subscription_list.push(subscription);
         }
-        if self.state().terminal_visible() {
-            let key = self.view().session_key(self.state().session);
-            let view = &mut self.workspace_list[self.active];
-            let typography = self.settings.terminal.clone();
-            let session = view.session_map.entry(key.clone()).or_insert_with(|| Session::spawn(&key, &typography, window, cx));
-            if view.terminal_focus && !self.settings_open {
-                if let Some(terminal) = &session.terminal {
-                    window.focus(&terminal.focus_handle(cx), cx);
-                }
-                view.terminal_focus = false;
-            }
-        }
+        self.hydrate_terminals(window, cx);
         let view = &mut self.workspace_list[self.active];
         if view.message_editor.is_none()
             && let Some(history) = &view.history_data
@@ -799,14 +829,18 @@ impl Grove {
         }
         file.hydrated = true;
         if let FileContent::Text(source) = &file.data.content {
-            let language = match file.data.path.extension().and_then(|extension| extension.to_str()) {
-                Some("rs") => "rust",
-                Some("json") => "json",
-                Some("js" | "ts" | "tsx") => "typescript",
-                Some("py") => "python",
-                Some("java") => "java",
-                Some("md") => "markdown",
-                _ => "text",
+            let is_markdown = markdown::is_markdown(&file.data.path);
+            let language = if is_markdown {
+                "markdown"
+            } else {
+                match file.data.path.extension().and_then(|extension| extension.to_str()) {
+                    Some("rs") => "rust",
+                    Some("json") => "json",
+                    Some("js" | "ts" | "tsx") => "typescript",
+                    Some("py") => "python",
+                    Some("java") => "java",
+                    _ => "text",
+                }
             };
             let syntax = ely_core::forms::syntax_of(&file.data.path.to_string_lossy());
             file.editor = Some(cx.new(|cx| {
@@ -818,12 +852,17 @@ impl Grove {
                     .line_height(self.settings.editor.line_height)
                     .read_only()
                     .show_caret(false);
-                if let Some(syntax) = syntax {
+                if is_markdown {
+                    editor.highlighter(markdown::highlighter(source))
+                } else if let Some(syntax) = syntax {
                     editor.highlighter(move |text, cx| ely_core::forms::code_highlights_with(text, syntax, cx))
                 } else {
                     editor.highlighter(|_, _| Vec::new())
                 }
             }));
+            if let Some(editor) = &file.editor {
+                file._editor_observation = Some(cx.observe(editor, |_, _, cx| cx.notify()));
+            }
         }
         if let Some(patch) = &file.data.patch {
             match crate::patch_view::parse(patch) {
@@ -844,7 +883,7 @@ impl Grove {
     }
     fn chrome(&self, title: &'static str) -> Div {
         h_flex()
-            .h(px(RAIL_WIDTH))
+            .h(px(CHROME))
             .flex_shrink_0()
             .min_w_0()
             .overflow_hidden()
@@ -859,11 +898,12 @@ impl Grove {
     }
     fn icon_button(&self, id: impl Into<ElementId>, icon: IconName, label: impl Into<SharedString>) -> Button {
         Button::new(id)
-            .icon(icon)
+            .child(icon_view(icon, 12., SECONDARY))
             .accessibility_label(label)
             .ghost()
             .xsmall()
-            .size(px(RAIL_WIDTH))
+            .w(px(24.))
+            .h(px(CHROME))
             .p_0()
             .rounded_none()
             .flex_shrink_0()
@@ -879,7 +919,7 @@ impl Grove {
         let input = self.view().search_input_list[panel.index()].as_ref().expect("search inputs hydrate before rendering").clone();
         let focus = input.read(cx).focus_handle(cx);
         h_flex()
-            .h(px(RAIL_WIDTH))
+            .h(px(CHROME))
             .flex_shrink_0()
             .min_w_0()
             .overflow_hidden()
@@ -888,7 +928,7 @@ impl Grove {
             .refine_style(&self.settings.secondary_ui_style())
             .child(
                 div()
-                    .size(px(RAIL_WIDTH))
+                    .size(px(CHROME))
                     .flex_shrink_0()
                     .flex()
                     .items_center()
@@ -918,7 +958,7 @@ impl Grove {
             .ghost()
             .xsmall()
             .selected(selected)
-            .h(px(RAIL_WIDTH))
+            .h(px(CHROME))
             .px(px(6.))
             .refine_style(&self.settings.secondary_ui_style())
             .flex_shrink_0()
@@ -972,8 +1012,8 @@ impl Render for Grove {
         self.hydrate(window, cx);
         let body = {
             let viewport = window.viewport_size();
-            let width = (f32::from(viewport.width) - RAIL_WIDTH).max(600.);
-            let height = (f32::from(viewport.height) - TITLE_HEIGHT - STATUS_HEIGHT).max(300.);
+            let width = (f32::from(viewport.width) - CHROME).max(600.);
+            let height = (f32::from(viewport.height) - CHROME - CHROME).max(300.);
             let col = (width * self.state().col_ratio).clamp(200., width - 360.);
             let dock_visible = self.state().dock_visible;
             let row = if dock_visible { (height * self.state().row_ratio).clamp(90., height - 90.) } else { height };
@@ -1069,6 +1109,9 @@ impl Render for Grove {
                 if !this.settings_open {
                     window.focus(&this.focus, cx);
                     this.toggle_dock(DockMode::Terminal, cx);
+                    if this.state().terminal_visible() {
+                        this.ensure_terminal(window, cx);
+                    }
                 }
             }))
             .on_action(cx.listener(|this, _: &HistoryMode, window, cx| {
@@ -1081,6 +1124,14 @@ impl Render for Grove {
                 if !this.settings_open {
                     window.focus(&this.focus, cx);
                     this.toggle_dock_visibility(cx);
+                    if this.state().terminal_visible() {
+                        this.ensure_terminal(window, cx);
+                    }
+                }
+            }))
+            .on_action(cx.listener(|this, _: &NewTerminal, window, cx| {
+                if !this.settings_open {
+                    this.new_terminal(window, cx);
                 }
             }))
             .child(

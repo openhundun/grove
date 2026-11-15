@@ -2,7 +2,9 @@ use crate::settings::DiffContextMode;
 use crate::settings::DiffViewMode;
 use crate::settings::PanelViewMode;
 use crate::settings::Settings;
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,11 +34,13 @@ pub struct ListPanelState {
     pub tree: bool,
     /// 已规范为小写并去除首尾空白；仅影响显示，不改变选择或折叠状态。
     pub query: String,
-    pub collapsed_path_set: HashSet<PathBuf>,
+    default_collapsed: bool,
+    /// Scope is the absolute worktree path; relative directory overrides survive refreshes.
+    path_override_map: HashMap<PathBuf, HashSet<PathBuf>>,
 }
 impl ListPanelState {
-    pub fn new(tree: bool) -> Self {
-        Self { tree, query: String::new(), collapsed_path_set: HashSet::new() }
+    pub fn new(tree: bool, default_expanded: bool) -> Self {
+        Self { tree, query: String::new(), default_collapsed: !default_expanded, path_override_map: HashMap::new() }
     }
 
     pub fn matches_query(&self, text: &str) -> bool {
@@ -57,9 +61,30 @@ impl ListPanelState {
         false
     }
 
-    pub fn toggle_path(&mut self, path: PathBuf) {
-        if !self.collapsed_path_set.remove(&path) {
-            self.collapsed_path_set.insert(path);
+    pub fn is_collapsed(&self, scope: &Path, path: &Path) -> bool {
+        if !self.query.is_empty() {
+            return false;
+        }
+        let overridden = self.path_override_map.get(scope).is_some_and(|path_set| path_set.contains(path));
+        if overridden { !self.default_collapsed } else { self.default_collapsed }
+    }
+
+    pub fn set_collapsed(&mut self, scope: &Path, path: &Path, collapsed: bool) {
+        // Search exposes ancestors temporarily; actions there must not rewrite saved choices.
+        if !self.query.is_empty() || self.is_collapsed(scope, path) == collapsed {
+            return;
+        }
+        if collapsed != self.default_collapsed {
+            if let Some(path_set) = self.path_override_map.get_mut(scope) {
+                path_set.insert(path.to_owned());
+            } else {
+                self.path_override_map.insert(scope.to_owned(), HashSet::from([path.to_owned()]));
+            }
+        } else if let Some(path_set) = self.path_override_map.get_mut(scope) {
+            path_set.remove(path);
+            if path_set.is_empty() {
+                self.path_override_map.remove(scope);
+            }
         }
     }
 }
@@ -80,12 +105,14 @@ pub struct WorkspaceState {
     pub repository_panel: ListPanelState,
     pub changes_panel: ListPanelState,
     pub files_panel: ListPanelState,
+    pub sessions_panel: ListPanelState,
     pub preview: bool,
     pub compare: bool,
     pub base: usize,
     pub col_ratio: f32,
     pub row_ratio: f32,
-    pub session: usize,
+    /// Stable terminal session identity, independent of its position in the session list.
+    pub session: Option<usize>,
 }
 impl Default for WorkspaceState {
     fn default() -> Self {
@@ -100,15 +127,16 @@ impl Default for WorkspaceState {
             fs_file: 0,
             split: false,
             diff_full: false,
-            repository_panel: ListPanelState::new(true),
-            changes_panel: ListPanelState::new(false),
-            files_panel: ListPanelState::new(true),
+            repository_panel: ListPanelState::new(true, true),
+            changes_panel: ListPanelState::new(false, false),
+            files_panel: ListPanelState::new(true, false),
+            sessions_panel: ListPanelState::new(false, false),
             preview: false,
             compare: false,
             base: 0,
             col_ratio: 0.2,
             row_ratio: 0.5,
-            session: 0,
+            session: None,
         }
     }
 }
@@ -117,9 +145,9 @@ impl WorkspaceState {
         Self {
             split: settings.diff_panel.view_mode == DiffViewMode::Split,
             diff_full: settings.diff_panel.context_mode == DiffContextMode::Full,
-            repository_panel: ListPanelState::new(settings.repository_panel.view_mode == PanelViewMode::Tree),
-            changes_panel: ListPanelState::new(settings.changes_panel.view_mode == PanelViewMode::Tree),
-            files_panel: ListPanelState::new(settings.file_panel.view_mode == PanelViewMode::Tree),
+            repository_panel: ListPanelState::new(settings.repository_panel.view_mode == PanelViewMode::Tree, true),
+            changes_panel: ListPanelState::new(settings.changes_panel.view_mode == PanelViewMode::Tree, false),
+            files_panel: ListPanelState::new(settings.file_panel.view_mode == PanelViewMode::Tree, false),
             ..Self::default()
         }
     }
@@ -180,7 +208,8 @@ mod tests {
         first.toggle_dock_visibility();
         first.row_ratio = 0.7;
         first.col_ratio = 0.3;
-        first.session = 2;
+        first.session = Some(2);
+        first.sessions_panel.query = "build".into();
         first.select_history(HistorySelection::Commit(3));
         assert_eq!(second.mode, Mode::Changes);
         assert_eq!(second.dock_mode, DockMode::History);
@@ -188,17 +217,19 @@ mod tests {
         assert!(!second.terminal_visible());
         assert_eq!(second.row_ratio, 0.5);
         assert_eq!(second.col_ratio, 0.2);
-        assert_eq!(second.session, 0);
+        assert_eq!(second.session, None);
+        assert!(second.sessions_panel.query.is_empty());
+        assert!(!second.sessions_panel.tree);
         assert_eq!(second.history, HistorySelection::Unstaged);
         assert_eq!(second.file, FileSelection::File(0));
 
         first.diff_full = false;
         first.split = false;
         first.repository_panel.tree = true;
-        first.changes_panel.toggle_path(PathBuf::from("src/nested"));
+        first.changes_panel.set_collapsed(Path::new("/worktree"), Path::new("src/nested"), false);
         assert!(second.split && second.diff_full);
         assert!(!second.repository_panel.tree);
-        assert!(second.changes_panel.collapsed_path_set.is_empty());
+        assert!(second.changes_panel.is_collapsed(Path::new("/worktree"), Path::new("src/nested")));
         assert_eq!(settings.diff_panel.context_mode, DiffContextMode::Full);
     }
 
@@ -225,7 +256,7 @@ mod tests {
             mode: Mode::Files,
             row_ratio: 0.7,
             col_ratio: 0.3,
-            session: 2,
+            session: Some(2),
             history: HistorySelection::Commit(3),
             file: FileSelection::File(4),
             fs_file: 5,
@@ -249,7 +280,7 @@ mod tests {
         assert_eq!(state.mode, Mode::Files);
         assert_eq!(state.row_ratio, 0.7);
         assert_eq!(state.col_ratio, 0.3);
-        assert_eq!(state.session, 2);
+        assert_eq!(state.session, Some(2));
         assert_eq!(state.history, HistorySelection::Commit(3));
         assert_eq!(state.file, FileSelection::File(4));
         assert_eq!(state.fs_file, 5);
@@ -274,5 +305,39 @@ mod tests {
         assert_eq!(state.file, FileSelection::File(0));
         assert_eq!(state.dock_mode, DockMode::Terminal);
         assert!(!state.dock_visible);
+    }
+
+    #[test]
+    fn navigation_defaults_collapse_files_and_changes_but_expand_repositories() {
+        let state = WorkspaceState::default();
+        let scope = Path::new("/workspace/worktree");
+        let directory = Path::new("src");
+        assert!(state.files_panel.is_collapsed(scope, directory));
+        assert!(state.changes_panel.is_collapsed(scope, directory));
+        assert!(!state.repository_panel.is_collapsed(Path::new(""), scope));
+    }
+
+    #[test]
+    fn directory_overrides_keep_worktree_scopes_separate_and_ignore_search_edits() {
+        let mut panel = ListPanelState::new(true, false);
+        let first_scope = Path::new("/workspace/repo");
+        let second_scope = Path::new("/workspace/repo/nested");
+        let first_path = Path::new("nested/src");
+        let second_path = Path::new("src");
+        panel.set_collapsed(first_scope, first_path, false);
+        assert!(!panel.is_collapsed(first_scope, first_path));
+        assert!(panel.is_collapsed(second_scope, second_path));
+        panel.set_collapsed(second_scope, second_path, false);
+        panel.set_collapsed(first_scope, first_path, true);
+        assert!(panel.is_collapsed(first_scope, first_path));
+        assert!(!panel.is_collapsed(second_scope, second_path));
+
+        panel.query = "needle".into();
+        assert!(!panel.is_collapsed(first_scope, first_path));
+        panel.set_collapsed(first_scope, first_path, false);
+        panel.set_collapsed(second_scope, second_path, true);
+        panel.query.clear();
+        assert!(panel.is_collapsed(first_scope, first_path));
+        assert!(!panel.is_collapsed(second_scope, second_path));
     }
 }

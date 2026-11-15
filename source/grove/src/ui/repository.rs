@@ -1,6 +1,7 @@
 //! Tree roots and worktrees share control columns; nesting offsets the entire child node.
 
 use super::*;
+use std::path::Path;
 
 impl Grove {
     pub(super) fn repositories(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -8,7 +9,7 @@ impl Grove {
         let panel = &self.state().repository_panel;
         let tree = panel.tree;
         let typography = &self.settings.repositories;
-        let row_height = typography.row_height();
+        let row_height = typography.row_height().max(18.);
         let head = self.chrome("Repositories").child(div().flex_1()).child(
             h_flex()
                 .tab_group()
@@ -43,7 +44,7 @@ impl Grove {
                     continue;
                 }
                 if tree {
-                    let collapsed = panel.query.is_empty() && panel.collapsed_path_set.contains(&repo.common_dir);
+                    let collapsed = panel.is_collapsed(Path::new(""), &repo.common_dir);
                     row_list.push(
                         ListItem::new(("repo", repo_index))
                             .accessibility_label(format!("{} · {}", repo.path.display(), repo.common_dir.display()))
@@ -63,22 +64,19 @@ impl Grove {
                                 h_flex()
                                     .w_full()
                                     .min_w_0()
-                                    .gap(px(6.))
+                                    .gap(px(4.))
                                     .items_center()
                                     .refine_style(&typography.style())
-                                    .child(div().flex().w(px(16.)).items_center().justify_center().flex_shrink_0().child(icon_view(
-                                        if collapsed { IconName::ChevronRight } else { IconName::ChevronDown },
-                                        11.,
-                                        MUTED,
-                                    )))
                                     .child(
-                                        div()
-                                            .flex()
-                                            .w(px(16.))
+                                        h_flex()
                                             .flex_shrink_0()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(icon::folder(&repo.path, !collapsed, repo.workspace_root, 14.)),
+                                            .gap(px(2.))
+                                            .child(div().flex().w(px(14.)).items_center().justify_center().flex_shrink_0().child(icon_view(
+                                                if collapsed { IconName::ChevronRight } else { IconName::ChevronDown },
+                                                12.,
+                                                MUTED,
+                                            )))
+                                            .child(div().flex_shrink_0().child(icon::folder(&repo.path, !collapsed, repo.workspace_root, 12.))),
                                     )
                                     .child(div().flex_shrink_0().whitespace_nowrap().child(repo.name.clone()))
                                     .when(repo.workspace_root, |this| {
@@ -148,36 +146,38 @@ impl Grove {
                                 h_flex()
                                     .w_full()
                                     .min_w_0()
-                                    .gap(px(6.))
+                                    .gap(px(4.))
                                     .items_center()
                                     .refine_style(&typography.style())
-                                    .when(tree, |this| this.pl(px(self.settings.repository_panel.indent_size)).child(div().w(px(16.)).flex_shrink_0()))
+                                    .when(tree, |this| this.pl(px(self.settings.repository_panel.indent_size)))
                                     .child(
-                                        self.icon_button(
-                                            ("open-worktree-files", repo_index * 100000 + worktree_index),
-                                            IconName::GitBranch,
-                                            format!("Open Files for {label} · {}", worktree.path.display()),
-                                        )
-                                        .tab_index(0)
-                                        .w(px(16.))
-                                        .h(px(row_height))
-                                        .text_color(rgb(0x1a7f6b))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            cx.stop_propagation();
-                                            this.open_worktree_files(repo_index, worktree_index, cx);
-                                        }))
-                                        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                        h_flex().flex_shrink_0().gap(px(2.)).when(tree, |this| this.child(div().w(px(14.)).flex_shrink_0())).child(
+                                            self.icon_button(
+                                                ("open-worktree-files", repo_index * 100000 + worktree_index),
+                                                IconName::GitBranch,
+                                                format!("Open Files for {label} · {}", worktree.path.display()),
+                                            )
+                                            .tab_index(0)
+                                            .w(px(16.))
+                                            .h(px(row_height))
+                                            .text_color(rgb(0x1a7f6b))
+                                            .on_click(cx.listener(move |this, _, _, cx| {
                                                 cx.stop_propagation();
                                                 this.open_worktree_files(repo_index, worktree_index, cx);
-                                            }
-                                        })),
+                                            }))
+                                            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                                    cx.stop_propagation();
+                                                    this.open_worktree_files(repo_index, worktree_index, cx);
+                                                }
+                                            })),
+                                        ),
                                     )
                                     .child(
                                         h_flex()
                                             .flex_shrink_0()
                                             .whitespace_nowrap()
-                                            .gap(px(6.))
+                                            .gap(px(4.))
                                             .when(!tree, |this| this.child(div().flex_shrink_0().whitespace_nowrap().text_color(rgb(MUTED)).child(repo.name.clone())))
                                             .child(div().flex_shrink_0().whitespace_nowrap().child(label)),
                                     )
@@ -224,17 +224,10 @@ impl Grove {
         let Some(repo) = view.snapshot.as_ref().and_then(|snapshot| snapshot.repository_list.get(repo_index)) else {
             return;
         };
-        let path = repo.common_dir.clone();
         let panel = &mut view.state.repository_panel;
-        match collapsed {
-            Some(true) => {
-                panel.collapsed_path_set.insert(path);
-            }
-            Some(false) => {
-                panel.collapsed_path_set.remove(&path);
-            }
-            None => panel.toggle_path(path),
-        }
+        let scope = Path::new("");
+        let collapsed = collapsed.unwrap_or_else(|| !panel.is_collapsed(scope, &repo.common_dir));
+        panel.set_collapsed(scope, &repo.common_dir, collapsed);
         cx.notify();
     }
 }

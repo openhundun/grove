@@ -1,11 +1,14 @@
 use ely_core::forms::Highlight;
 use ely_core::theme::ActiveTheme as _;
+use ely_git::DiffSide;
+use ely_git::Stretch;
 use gpui_kit::App;
 use gpui_kit::FontWeight;
 use markdown::mdast::Node;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::ops::Range;
+use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Ink {
@@ -27,6 +30,12 @@ struct Style {
 
 type Span = (Range<usize>, Style);
 
+pub(super) fn is_markdown(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| ["md", "mdown", "markdown"].iter().any(|candidate| extension.eq_ignore_ascii_case(candidate)))
+}
+
 /// Parse immutable source once; only resolve theme colors when a line is painted.
 ///
 /// The editor supplies text without a line index. Identical lines with different
@@ -35,55 +44,119 @@ type Span = (Range<usize>, Style);
 /// No source characters are replaced, decoded, or hidden.
 pub(super) fn highlighter(source: &str) -> impl Fn(&str, &App) -> Vec<(Range<usize>, Highlight)> + 'static {
     let line_map = source_highlights(source);
-    move |line, cx| {
-        let Some(span_list) = line_map.get(line) else { return Vec::new() };
-        let syntax = &cx.theme().colors.syntax;
-        span_list
-            .iter()
-            .map(|(range, style)| {
-                let color = match style.ink {
-                    Ink::Heading | Ink::Marker | Ink::Strong => syntax.keyword,
-                    Ink::Quote => syntax.comment,
-                    Ink::Emphasis => syntax.type_name,
-                    Ink::Code => syntax.string,
-                    Ink::Link => syntax.function,
-                };
-                let highlight = Highlight { weight: style.bold.then_some(FontWeight::BOLD), italic: style.italic, ..Highlight::new(color) };
-                (range.clone(), highlight)
-            })
-            .collect()
+    move |line, cx| paint(line_map.get(line).map_or(&[], Vec::as_slice), cx)
+}
+
+/// Prepared once by DiffViewer, using both complete sources before any rows fold.
+pub(super) fn diff_highlighter(stretch_list: &[Stretch]) -> impl Fn(DiffSide, usize, &str, &App) -> Vec<(Range<usize>, Highlight)> + 'static + use<> {
+    let old = diff_source(stretch_list, DiffSide::Old).map(SourceHighlights::new);
+    let new = diff_source(stretch_list, DiffSide::New).map(SourceHighlights::new);
+    move |side, number, text, cx| {
+        let source = match side {
+            DiffSide::Old => &old,
+            DiffSide::New => &new,
+        };
+        paint(source.as_ref().map_or(&[], |source| source.line(number, text)), cx)
+    }
+}
+
+fn paint(span_list: &[Span], cx: &App) -> Vec<(Range<usize>, Highlight)> {
+    let syntax = &cx.theme().colors.syntax;
+    span_list
+        .iter()
+        .map(|(range, style)| {
+            let color = match style.ink {
+                Ink::Heading | Ink::Marker | Ink::Strong => syntax.keyword,
+                Ink::Quote => syntax.comment,
+                Ink::Emphasis => syntax.type_name,
+                Ink::Code => syntax.string,
+                Ink::Link => syntax.function,
+            };
+            let highlight = Highlight { weight: style.bold.then_some(FontWeight::BOLD), italic: style.italic, ..Highlight::new(color) };
+            (range.clone(), highlight)
+        })
+        .collect()
+}
+
+fn diff_source(stretch_list: &[Stretch], side: DiffSide) -> Option<String> {
+    let mut source = String::new();
+    let mut next = 1;
+    let mut ended = false;
+    for line in stretch_list.iter().flat_map(|stretch| match stretch {
+        Stretch::Hunk { lines, .. } | Stretch::Folded(lines) => lines,
+    }) {
+        let number = match side {
+            DiffSide::Old => line.old,
+            DiffSide::New => line.new,
+        };
+        let Some(number) = number else { continue };
+        // A partial external patch cannot establish the missing fence context.
+        if number != next || ended {
+            return None;
+        }
+        source.push_str(&line.text);
+        ended = line.no_newline;
+        if !ended {
+            source.push('\n');
+        }
+        next += 1;
+    }
+    Some(source)
+}
+
+struct SourceHighlights {
+    source: String,
+    line_list: Vec<(Range<usize>, Vec<Span>)>,
+}
+
+impl SourceHighlights {
+    fn new(source: String) -> Self {
+        // CommonMark has no parse errors; only opt-in MDX can return an error.
+        let root = markdown::to_mdast(&source, &markdown::ParseOptions::default()).expect("CommonMark always parses");
+        let mut span_list = Vec::new();
+        collect(&root, &source, None, &mut span_list);
+        let span_list = flatten(span_list);
+        let mut line_list = Vec::new();
+        let mut offset = 0;
+        let mut first = 0;
+        // Match the editor's buffer: remove LF only, preserving a preceding CR.
+        for line in source.split('\n') {
+            let end = offset + line.len();
+            while first < span_list.len() && span_list[first].0.end <= offset {
+                first += 1;
+            }
+            let line_span_list = span_list[first..]
+                .iter()
+                .take_while(|(range, _)| range.start < end)
+                .map(|(range, style)| (range.start.max(offset) - offset..range.end.min(end) - offset, *style))
+                .collect();
+            line_list.push((offset..end, line_span_list));
+            offset = end + 1;
+        }
+        Self { source, line_list }
+    }
+
+    fn line(&self, number: usize, text: &str) -> &[Span] {
+        let Some((range, span_list)) = number.checked_sub(1).and_then(|index| self.line_list.get(index)) else {
+            return &[];
+        };
+        if &self.source[range.clone()] == text { span_list } else { &[] }
     }
 }
 
 fn source_highlights(source: &str) -> HashMap<String, Vec<Span>> {
-    // CommonMark has no parse errors; only opt-in MDX can return an error.
-    let root = markdown::to_mdast(source, &markdown::ParseOptions::default()).expect("CommonMark always parses");
-    let mut span_list = Vec::new();
-    collect(&root, source, None, &mut span_list);
-    let span_list = flatten(span_list);
+    let parsed = SourceHighlights::new(source.to_owned());
     let mut line_map: HashMap<String, Vec<Span>> = HashMap::new();
-    let mut offset = 0;
-    let mut first = 0;
-    // Match the editor's buffer: only LF is removed, preserving a preceding CR.
-    for line in source.split('\n') {
-        let end = offset + line.len();
-        while first < span_list.len() && span_list[first].0.end <= offset {
-            first += 1;
-        }
-        let line_span_list = span_list[first..]
-            .iter()
-            .take_while(|(range, _)| range.start < end)
-            .map(|(range, style)| (range.start.max(offset) - offset..range.end.min(end) - offset, *style))
-            .collect::<Vec<_>>();
+    for (range, span_list) in parsed.line_list {
+        let line = &parsed.source[range];
         if let Some(existing) = line_map.get_mut(line) {
-            if *existing != line_span_list {
+            if *existing != span_list {
                 // All occurrences share this entry; never invent a line index.
                 existing.clear();
             }
         } else {
-            line_map.insert(line.to_owned(), line_span_list);
+            line_map.insert(line.to_owned(), span_list);
         }
-        offset = end + 1;
     }
     line_map
 }
@@ -214,5 +287,50 @@ mod tests {
         let line_map = source_highlights(source);
         assert!(line_map["**相同**"].is_empty());
         assert!(line_map["独有 *字面*"].iter().all(|(_, style)| style.ink == Ink::Code && !style.italic));
+    }
+
+    #[test]
+    fn diff_uses_actual_side_and_line_with_deleted_fences_and_folded_context() {
+        let old = "# Header\n\n```text\n**repeat**\n```\n\n**repeat**\n";
+        let new = "# Header\n\n**repeat**\n\n**repeat**\n";
+        let stretch_list = ely_git::diff(old, new, 0);
+        assert!(stretch_list.iter().any(|stretch| matches!(stretch, Stretch::Folded(_))));
+        assert_eq!(diff_source(&stretch_list, DiffSide::Old).as_deref(), Some(old));
+        assert_eq!(diff_source(&stretch_list, DiffSide::New).as_deref(), Some(new));
+        let old = SourceHighlights::new(old.to_owned());
+        let new = SourceHighlights::new(new.to_owned());
+        assert!(old.line(4, "**repeat**").iter().all(|(_, style)| style.ink == Ink::Code && !style.bold));
+        assert!(old.line(7, "**repeat**").iter().any(|(_, style)| style.ink == Ink::Strong && style.bold));
+        assert!(new.line(3, "**repeat**").iter().any(|(_, style)| style.ink == Ink::Strong && style.bold));
+        assert!(old.line(4, "different line").is_empty());
+    }
+
+    #[test]
+    fn diff_reconstructs_crlf_and_each_sides_real_eof() {
+        let old = "```text\r\n**old**\r\n```";
+        let new = "**new**\r\n";
+        let stretch_list = ely_git::diff(old, new, 0);
+        assert_eq!(diff_source(&stretch_list, DiffSide::Old).as_deref(), Some(old));
+        assert_eq!(diff_source(&stretch_list, DiffSide::New).as_deref(), Some(new));
+        let partial = [Stretch::Folded(vec![ely_git::DiffLine {
+            kind: ely_git::LineKind::Same,
+            old: Some(20),
+            new: Some(30),
+            text: "**unknown fence context**".into(),
+            no_newline: false,
+            words: Vec::new(),
+        }])];
+        assert!(diff_source(&partial, DiffSide::Old).is_none());
+        assert!(diff_source(&partial, DiffSide::New).is_none());
+    }
+
+    #[test]
+    fn markdown_detection_uses_only_supported_extensions() {
+        for path in ["README.md", "doc.MDOWN", "notes.MarkDown"] {
+            assert!(is_markdown(Path::new(path)));
+        }
+        for path in ["README", "script", "notes.txt", "doc.md.rs"] {
+            assert!(!is_markdown(Path::new(path)));
+        }
     }
 }

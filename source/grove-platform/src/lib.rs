@@ -7,6 +7,11 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::*;
 
+#[cfg(target_os = "macos")]
+mod process;
+#[cfg(target_os = "macos")]
+pub use process::process_name;
+
 #[cfg(not(target_os = "macos"))]
 compile_error!("Grove currently supports macOS only; implement a native platform module before enabling another target.");
 

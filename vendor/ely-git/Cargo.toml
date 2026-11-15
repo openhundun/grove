@@ -11,7 +11,7 @@ rust-version = "1.98"
 version      = "0.2.0"
 
 [package.metadata.upstream]
-patch    = "Diff viewer family, pixel size, base weight and line-height builders shape and cache the same fonts they paint; configured line-height defines equal fixed row slots with inset focus borders and full-height backgrounds; Unified uses one two-axis viewport, Split uses two real viewports with bidirectionally linked axes, independently clamped horizontal ranges and per-pane scrollbar chrome, including live typography changes."
+patch    = "Diff viewer family, pixel size, base weight and line-height builders shape and cache the same fonts they paint; configured line-height defines equal fixed row slots with inset focus borders and full-height backgrounds; Unified uses one two-axis viewport, Split uses two real viewports with bidirectionally linked axes, independently clamped horizontal ranges and per-pane scrollbar chrome, including live typography changes. Folded context has persistent inline Expand/Minimize controls on real hunk headers, explicit unchanged source ranges for trailing/all-unchanged sections, and separate on_open/on_close events. A cached side-aware, one-based custom highlighter receives literal source lines, preserving the default lexer when absent; missing EOF newlines are metadata rendered outside source text, with CRLF bytes preserved."
 revision = "01a2135e99bb52fb817b7b62198dbdd24022bcf8"
 
 [features]

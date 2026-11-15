@@ -1,8 +1,8 @@
 use super::decor::GitMark;
 use super::state::CodeEditor;
 use super::state::LineNumbers;
-use crate::primitives::Disclosure;
 use crate::primitives::Icon;
+use crate::primitives::IconName;
 use crate::primitives::Severity;
 use crate::theme::ActiveTheme;
 use crate::theme::IconSize;
@@ -15,8 +15,13 @@ use gpui::MouseButton;
 use gpui::ParentElement;
 use gpui::SharedString;
 use gpui::Styled;
+use gpui::Transformation;
 use gpui::div;
 use gpui::prelude::*;
+use gpui::px;
+use gpui::radians;
+use gpui::svg;
+use std::f32::consts::FRAC_PI_2;
 
 /// What a gutter cell shows beside a row.
 pub(crate) enum Cell {
@@ -116,7 +121,15 @@ impl CodeEditor {
         };
         let opens = self.frame.folds.iter().any(|(header, _)| *header == line);
         let folded = self.folded.contains(&line);
-        let chevron = opens.then(|| Disclosure::new(("fold", line), !folded).into_any_element());
+        let chevron = opens.then(|| {
+            svg()
+                .data(IconName::ChevronRight.svg())
+                .size(px(10.))
+                .flex_none()
+                .text_color(colors.fg_subtle)
+                .when(!folded, |chevron| chevron.with_transformation(Transformation::rotate(radians(FRAC_PI_2))))
+                .into_any_element()
+        });
         let entity = cx.entity();
         let toggle = entity.clone();
         let git = self.git_color(line, cx);

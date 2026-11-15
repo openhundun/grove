@@ -25,7 +25,7 @@ pub fn parse(patch: &str) -> Result<Rc<Vec<Stretch>>, &'static str> {
             }
             if line == "\\ No newline at end of file" {
                 let previous = line_list.last_mut().ok_or("orphan newline marker")?;
-                previous.text = format!("{}  ⟵ No newline at end of file", previous.text).into();
+                previous.no_newline = true;
                 source.next();
                 continue;
             }
@@ -53,7 +53,14 @@ pub fn parse(patch: &str) -> Result<Rc<Vec<Stretch>>, &'static str> {
                 }
                 _ => return Err("hunk body does not match declared line counts"),
             };
-            line_list.push(DiffLine { kind, old: old_line, new: new_line, text: text.to_owned().into(), words: Vec::new() });
+            line_list.push(DiffLine {
+                kind,
+                old: old_line,
+                new: new_line,
+                text: text.to_owned().into(),
+                no_newline: false,
+                words: Vec::new(),
+            });
             source.next();
         }
         if old_used != old_count || new_used != new_count {
@@ -68,13 +75,14 @@ pub fn parse(patch: &str) -> Result<Rc<Vec<Stretch>>, &'static str> {
 /// 无文本变化时将实际文件内容作为一个折叠段，保留 CR 和真实行号。
 pub fn unchanged(source: &str) -> Rc<Vec<Stretch>> {
     let line_list: Vec<DiffLine> = source
-        .split_terminator('\n')
+        .split_inclusive('\n')
         .enumerate()
         .map(|(index, text)| DiffLine {
             kind: LineKind::Same,
             old: Some(index + 1),
             new: Some(index + 1),
-            text: text.to_owned().into(),
+            text: text.strip_suffix('\n').unwrap_or(text).to_owned().into(),
+            no_newline: !text.ends_with('\n'),
             words: Vec::new(),
         })
         .collect();
@@ -353,6 +361,7 @@ mod tests {
             ]
         );
         assert!(lines.iter().all(|line| line.words.is_empty()));
+        assert_eq!(lines.iter().map(|line| line.no_newline).collect::<Vec<_>>(), [false, false, true]);
         assert!(unchanged("").is_empty());
         assert_eq!(flattened(&unchanged("\n")), [(LineKind::Same, Some(1), Some(1), String::new())]);
         assert_eq!(
@@ -382,7 +391,8 @@ mod tests {
         let Stretch::Hunk { lines, header } = &stretches[1] else { panic!("expected supplied hunk") };
         assert_eq!((lines[0].old, lines[0].new), (Some(42), Some(42)));
         assert_eq!((lines[1].old, lines[1].new), (None, Some(43)));
-        assert!(lines[1].text.contains("No newline at end of file"));
+        assert_eq!(lines[1].text.as_ref(), "extra");
+        assert!(lines[1].no_newline);
         assert_eq!(header.as_ref(), "@@ -42,1 +42,2 @@");
         assert_eq!(
             flattened(&stretches),
@@ -391,7 +401,7 @@ mod tests {
                 (LineKind::Removed, Some(9), None, "old".to_owned()),
                 (LineKind::Added, None, Some(9), "new".to_owned()),
                 (LineKind::Same, Some(42), Some(42), "last".to_owned()),
-                (LineKind::Added, None, Some(43), "extra  ⟵ No newline at end of file".to_owned()),
+                (LineKind::Added, None, Some(43), "extra".to_owned()),
             ]
         );
         assert!(parse("@@ -1,2 +1 @@\n-a\n+b\n").is_err());
@@ -401,17 +411,18 @@ mod tests {
         let changed = parse("@@ -1 +1 @@\n-before\n\\ No newline at end of file\n+after\n\\ No newline at end of file").unwrap();
         assert_eq!(
             flattened(&changed),
-            [
-                (LineKind::Removed, Some(1), None, "before  ⟵ No newline at end of file".to_owned()),
-                (LineKind::Added, None, Some(1), "after  ⟵ No newline at end of file".to_owned()),
-            ]
+            [(LineKind::Removed, Some(1), None, "before".to_owned()), (LineKind::Added, None, Some(1), "after".to_owned()),]
         );
+        assert!(changed.iter().all(|stretch| match stretch {
+            Stretch::Hunk { lines, .. } | Stretch::Folded(lines) => lines.iter().all(|line| line.no_newline),
+        }));
         let trailing = parse("@@ -1,5 +1,5 @@\n-old\n+new\n a\n b\n c\n tail\n\\ No newline at end of file").unwrap();
         let [Stretch::Hunk { header, .. }, Stretch::Folded(hidden)] = trailing.as_slice() else {
             panic!("expected a folded final line")
         };
         assert_eq!(header.as_ref(), "@@ -1,4 +1,4 @@");
         assert_eq!(hidden.len(), 1);
+        assert!(hidden[0].no_newline);
         assert_eq!(
             flattened(&trailing),
             [
@@ -420,7 +431,7 @@ mod tests {
                 (LineKind::Same, Some(2), Some(2), "a".to_owned()),
                 (LineKind::Same, Some(3), Some(3), "b".to_owned()),
                 (LineKind::Same, Some(4), Some(4), "c".to_owned()),
-                (LineKind::Same, Some(5), Some(5), "tail  ⟵ No newline at end of file".to_owned()),
+                (LineKind::Same, Some(5), Some(5), "tail".to_owned()),
             ]
         );
     }

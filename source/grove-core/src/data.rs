@@ -88,12 +88,26 @@ pub enum FileContent {
     Unavailable(String),
 }
 
+/// Attribution for an actual working-text line; `line` is 1-based.
+#[derive(Clone, Debug)]
+pub struct BlameLine {
+    pub line: usize,
+    pub oid: String,
+    pub author: String,
+    pub summary: String,
+    pub time: i64,
+    pub uncommitted: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct FileData {
     pub path: PathBuf,
     pub content: FileContent,
     pub patch: Option<Arc<str>>,
     pub notice: Option<String>,
+    /// Loaded only for filesystem previews, against the text in `content`.
+    pub blame: Vec<BlameLine>,
+    pub blame_notice: Option<String>,
 }
 
 #[derive(Clone, Debug)]

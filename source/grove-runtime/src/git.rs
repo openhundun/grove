@@ -2,6 +2,7 @@
 //!
 //! 文本侧预览上限为 2 MiB。完整上下文 diff 的显示上限为 12 MiB，覆盖两侧文本、逐行前缀及元数据。
 //! Git 输出不截断；超限、二进制和不支持的冲突比较通过可见提示说明。
+//! Files 预览的 blame 只查询一次，以已读取文本通过 stdin 对照 HEAD；无法逐行对应时显示提示，不借用历史行归属。
 use crate::fs;
 use grove_core::data::*;
 use grove_platform::git_path_bytes;
@@ -11,9 +12,13 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::ffi::OsString;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Output;
+use std::process::Stdio;
 use std::sync::Arc;
 
 const MAX_DIFF_BYTES: u64 = 6 * fs::MAX_TEXT_BYTES;
@@ -441,7 +446,144 @@ pub fn file(root: &Path, path: &Path, revision: Option<Revision>, file: &Path) -
             content = FileContent::Unavailable("This revision has no readable text on the selected side; inspect the diff.".into());
         }
     }
-    Ok(FileData { path: file.to_path_buf(), content, patch, notice })
+    let (blame, blame_notice) = if revision.is_none() { working_blame(&path, file, &content) } else { (Vec::new(), None) };
+    Ok(FileData { path: file.to_path_buf(), content, patch, notice, blame, blame_notice })
+}
+
+fn working_blame(path: &Path, file: &Path, content: &FileContent) -> (Vec<BlameLine>, Option<String>) {
+    let source = match content {
+        FileContent::Text(source) => source,
+        FileContent::Binary => return (Vec::new(), Some("Blame is unavailable for binary or non-UTF-8 content.".into())),
+        FileContent::Unavailable(message) => {
+            return (
+                Vec::new(),
+                Some(format!("No readable working text for blame (deleted, unreadable, or over the 2 MiB preview limit): {message}")),
+            );
+        }
+    };
+    match blame(path, file, source) {
+        Ok(blame) => (blame, None),
+        Err(error) => {
+            let notice = if error.contains("no such ref: HEAD") {
+                "Blame is unavailable until this repository has a HEAD commit.".into()
+            } else if error.contains("no such path ") && error.contains(" in HEAD") {
+                format!("Blame is unavailable for this path at HEAD; Git cannot attribute untracked files or renames not recorded in the index. {error}")
+            } else {
+                format!("Blame is unavailable: {error}")
+            };
+            (Vec::new(), Some(notice))
+        }
+    }
+}
+
+fn blame(path: &Path, file: &Path, source: &str) -> Result<Vec<BlameLine>, String> {
+    // --contents defaults to HEAD. An explicit HEAD is rejected by older Git versions.
+    let mut child = read_only_git_command(path)
+        .args([
+            "blame",
+            "--line-porcelain",
+            "--root",
+            "--encoding=UTF-8",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--ignore-revs-file=",
+            "--contents",
+            "-",
+            "--",
+        ])
+        .arg(file)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("git blame: {error}"))?;
+    let mut stdin = child.stdin.take().expect("piped Git blame stdin");
+    let mut stdout = BufReader::new(child.stdout.take().expect("piped Git blame stdout"));
+    std::thread::scope(|scope| {
+        // Drain stderr while parsing stdout, without buffering porcelain metadata for the whole file.
+        let output_task = scope.spawn(move || child.wait_with_output());
+        let input_task = scope.spawn(move || stdin.write_all(source.as_bytes()).map_err(|error| format!("git blame stdin: {error}")));
+        let blame_result = parse_blame(&mut stdout, source);
+        let drain_result = std::io::copy(&mut stdout, &mut std::io::sink()).map_err(|error| format!("git blame stdout: {error}"));
+        let output = output_task
+            .join()
+            .map_err(|_| "Git blame process reader panicked".to_owned())?
+            .map_err(|error| format!("git blame: {error}"))?;
+        checked(output)?;
+        input_task.join().map_err(|_| "Git blame stdin writer panicked".to_owned())??;
+        drain_result?;
+        blame_result
+    })
+}
+
+fn read_blame_line(input: &mut impl BufRead, buffer: &mut Vec<u8>) -> Result<bool, String> {
+    buffer.clear();
+    let count = input.read_until(b'\n', buffer).map_err(|error| format!("git blame stdout: {error}"))?;
+    if buffer.last() == Some(&b'\n') {
+        buffer.pop();
+    }
+    Ok(count > 0)
+}
+
+fn parse_blame(input: &mut impl BufRead, source: &str) -> Result<Vec<BlameLine>, String> {
+    let source_line_iter = source.split_terminator('\n');
+    let mut blame_list = Vec::with_capacity(source_line_iter.clone().count());
+    let mut buffer = Vec::new();
+    for (index, source_line) in source_line_iter.enumerate() {
+        if !read_blame_line(input, &mut buffer)? {
+            return Err("Git blame returned fewer lines than the loaded working text".into());
+        }
+        let header = std::str::from_utf8(&buffer).map_err(|_| "Invalid Git blame header")?;
+        let mut part_iter = header.split_whitespace();
+        let oid = part_iter.next().ok_or("Missing Git blame object ID")?;
+        if !matches!(oid.len(), 40 | 64) || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("Invalid Git blame object ID".into());
+        }
+        part_iter.next().ok_or("Missing Git blame original line")?;
+        let line = part_iter.next().and_then(|value| value.parse::<usize>().ok()).ok_or("Invalid Git blame final line")?;
+        if line != index + 1 {
+            return Err("Git blame line numbers do not match the loaded working text".into());
+        }
+        let uncommitted = oid.bytes().all(|byte| byte == b'0');
+        let oid = oid.to_owned();
+        let mut author = None;
+        let mut summary = None;
+        let mut time = None;
+        loop {
+            if !read_blame_line(input, &mut buffer)? {
+                return Err("Incomplete Git blame line record".into());
+            }
+            if let Some(value) = buffer.strip_prefix(b"\t") {
+                if value != source_line.as_bytes() {
+                    return Err("Git transformed the loaded working text; its blame cannot be mapped to the displayed lines".into());
+                }
+                break;
+            }
+            if let Some(value) = buffer.strip_prefix(b"author ") {
+                author = Some(if uncommitted {
+                    "Not Committed Yet".to_owned()
+                } else {
+                    std::str::from_utf8(value).map_err(|_| "Git blame author is not UTF-8")?.to_owned()
+                });
+            } else if let Some(value) = buffer.strip_prefix(b"summary ") {
+                summary = Some(std::str::from_utf8(value).map_err(|_| "Git blame summary is not UTF-8")?.to_owned());
+            } else if let Some(value) = buffer.strip_prefix(b"author-time ") {
+                time = Some(std::str::from_utf8(value).ok().and_then(|value| value.parse::<i64>().ok()).ok_or("Invalid Git blame author time")?);
+            }
+        }
+        blame_list.push(BlameLine {
+            line,
+            oid,
+            author: author.ok_or("Missing Git blame author")?,
+            summary: summary.ok_or("Missing Git blame summary")?,
+            time: time.ok_or("Missing Git blame author time")?,
+            uncommitted,
+        });
+    }
+    if read_blame_line(input, &mut buffer)? {
+        return Err("Git blame returned more lines than the loaded working text".into());
+    }
+    Ok(blame_list)
 }
 fn blob(path: &Path, mut prefix: OsString, file: &Path) -> FileContent {
     prefix.push(file);

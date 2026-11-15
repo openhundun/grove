@@ -82,6 +82,7 @@ pub use tags::StashList;
 pub use tags::TagList;
 pub use viewer::DiffLayout;
 pub use viewer::DiffScrollHandle;
+pub use viewer::DiffSide;
 pub use viewer::DiffViewer;
 
 /// Core's test setup with this chapter's keys.

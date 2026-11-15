@@ -4,21 +4,26 @@ use super::diff::LineKind;
 use super::diff::Stretch;
 use super::diff::diff;
 use super::diff::side_numbers;
+use super::rows::Fold;
 use super::rows::Place;
 use super::rows::Shown;
 use super::rows::code;
+use super::rows::code_highlighted;
 use super::rows::shown;
 use super::rows::spoken;
 use super::rows::washes;
 use crate::buttons::Button;
 use crate::buttons::ButtonVariant;
 use crate::buttons::SegmentedControl;
+use crate::forms::Highlight;
 use crate::forms::Syntax;
 use crate::forms::syntax_of;
 use crate::i18n;
+use crate::primitives::IconName;
 use crate::primitives::tab_stop;
 use crate::theme::ActiveTheme;
 use crate::theme::ControlSize;
+use crate::theme::Palette;
 use crate::theme::TextSize;
 use crate::typography::LEADING;
 use gpui::AnyElement;
@@ -27,7 +32,9 @@ use gpui::BorderStyle;
 use gpui::Bounds;
 use gpui::ElementId;
 use gpui::FocusHandle;
+use gpui::FontStyle;
 use gpui::FontWeight;
+use gpui::HighlightStyle;
 use gpui::Hsla;
 use gpui::InteractiveElement;
 use gpui::IntoElement;
@@ -39,7 +46,9 @@ use gpui::RenderOnce;
 use gpui::Role;
 use gpui::SharedString;
 use gpui::StatefulInteractiveElement;
+use gpui::StrikethroughStyle;
 use gpui::Styled;
+use gpui::StyledText;
 use gpui::UniformListScrollHandle;
 use gpui::Window;
 use gpui::canvas;
@@ -50,8 +59,10 @@ use gpui::point;
 use gpui::prelude::*;
 use gpui::px;
 use gpui::size;
+use gpui::svg;
 use gpui::uniform_list;
 use std::cell::Cell;
+use std::ops::Range;
 use std::rc::Rc;
 
 /// How a diff lays out.
@@ -63,6 +74,15 @@ pub enum DiffLayout {
     Split,
 }
 
+/// The complete source whose one-based line is being painted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffSide {
+    /// The original source, including removed lines.
+    Old,
+    /// The modified source, including added lines.
+    New,
+}
+
 /// Unchanged lines kept around each change.
 const CONTEXT: usize = 3;
 
@@ -70,6 +90,13 @@ type OnIndex = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 type OnLayout = Rc<dyn Fn(DiffLayout, &mut Window, &mut App)>;
 type OnLine = Rc<dyn Fn(Place, bool, &mut Window, &mut App)>;
 type Scrollbars = Rc<dyn Fn(&UniformListScrollHandle, &mut Window, &mut App) -> AnyElement>;
+type LineHighlighter = dyn Fn(DiffSide, usize, &str, &App) -> Vec<(Range<usize>, Highlight)>;
+type PrepareHighlighter = Rc<dyn Fn(&[Stretch]) -> Rc<LineHighlighter>>;
+
+struct PreparedHighlighter {
+    stretches: Rc<Vec<Stretch>>,
+    paint: Rc<LineHighlighter>,
+}
 
 /// Persistent diff viewports: Split links both axes, clamping each pane to its own range.
 #[derive(Clone, Default)]
@@ -133,6 +160,7 @@ struct DiffScrollState {
     scroll: DiffScrollHandle,
     viewport: [Rc<Cell<Bounds<Pixels>>>; 3],
     measured: Option<MeasuredDiff>,
+    highlighter: Option<PreparedHighlighter>,
 }
 
 struct MeasuredDiff {
@@ -142,6 +170,7 @@ struct MeasuredDiff {
     weight: FontWeight,
     line_height: f32,
     syntax: Option<&'static Syntax>,
+    highlighter: Option<Rc<LineHighlighter>>,
     layout: DiffLayout,
     open: Vec<usize>,
     code: [Pixels; 3],
@@ -178,6 +207,90 @@ fn focus_frame(focus: FocusHandle, color: Hsla) -> impl IntoElement {
     .inset_0()
 }
 
+fn code_view(line: &DiffLine, side: DiffSide, colors: &Palette, syntax: Option<&Syntax>, highlighter: Option<&LineHighlighter>, cx: &App) -> gpui::Div {
+    let number = match side {
+        DiffSide::Old => line.old,
+        DiffSide::New => line.new,
+    };
+    let text: StyledText = match (highlighter, number) {
+        (Some(highlight), Some(number)) => {
+            let thickness = cx.theme().underline_thickness();
+            let style_list = highlight(side, number, &line.text, cx)
+                .into_iter()
+                .map(|(range, highlight)| {
+                    (
+                        range,
+                        HighlightStyle {
+                            color: Some(highlight.color),
+                            background_color: highlight.background,
+                            font_weight: highlight.weight,
+                            font_style: highlight.italic.then_some(FontStyle::Italic),
+                            strikethrough: highlight.strike.then_some(StrikethroughStyle { thickness, color: Some(highlight.color) }),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect();
+            code_highlighted(line, colors, style_list)
+        }
+        _ => code(line, colors, syntax, cx),
+    };
+    div().flex().items_center().whitespace_nowrap().child(text).children(line.no_newline.then(|| {
+        div()
+            .id(("no-newline", line.old.unwrap_or(0) + line.new.unwrap_or(0)))
+            .pl_2()
+            .text_color(colors.fg_subtle)
+            .role(Role::Label)
+            .aria_label("No newline at end of file")
+            .child("⟵ No newline at end of file")
+    }))
+}
+
+fn unified_side(line: &DiffLine) -> DiffSide {
+    if line.kind == LineKind::Removed { DiffSide::Old } else { DiffSide::New }
+}
+
+fn fold_control(id: &ElementId, fold: &Fold, on_open: &Option<OnIndex>, on_close: &Option<OnIndex>, height: Pixels, window: &mut Window, cx: &mut App) -> AnyElement {
+    let colors = &cx.theme().colors;
+    let own = ElementId::from((id.clone(), format!("fold-{}", fold.stretch)));
+    let label: SharedString = format!("{} {}", if fold.expanded { "Collapse" } else { "Expand" }, fold.description).into();
+    let run = if fold.expanded { on_close.clone() } else { on_open.clone() };
+    let selector = format!("diff-fold-{}", fold.stretch);
+    div()
+        .id(own.clone())
+        .debug_selector(move || selector)
+        .flex_none()
+        .w(px(24.0))
+        .h(height)
+        .flex()
+        .items_center()
+        .justify_center()
+        .role(if run.is_some() { Role::Button } else { Role::Label })
+        .aria_label(label)
+        .aria_expanded(fold.expanded)
+        .child(
+            svg()
+                .data(if fold.expanded { IconName::Minimize2.svg() } else { IconName::ChevronsUpDown.svg() })
+                .size(px(10.))
+                .flex_none()
+                .text_color(colors.fg_muted),
+        )
+        .when_some(run, |button, run| {
+            let stretch = fold.stretch;
+            let focus = tab_stop((own, "focus").into(), true, window, cx);
+            button
+                .relative()
+                .tab_index(0)
+                .track_focus(&focus)
+                .child(focus_frame(focus, cx.theme().colors.focus))
+                .cursor_pointer()
+                .hover(|button| button.bg(cx.theme().colors.hover))
+                .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+                .on_click(move |_, window, cx| run(stretch, window, cx))
+        })
+        .into_any_element()
+}
+
 /// A file's changes, unified or split; fills its box.
 ///
 /// ```
@@ -194,6 +307,7 @@ pub struct DiffViewer {
     /// How its lines read, from the path.
     pub(super) syntax: Option<&'static Syntax>,
     stretches: Rc<Vec<Stretch>>,
+    highlighter: Option<PrepareHighlighter>,
     stat: (usize, usize),
     layout: DiffLayout,
     font_family: Option<SharedString>,
@@ -202,6 +316,7 @@ pub struct DiffViewer {
     line_height: Option<f32>,
     open: Vec<usize>,
     on_open: Option<OnIndex>,
+    on_close: Option<OnIndex>,
     on_layout: Option<OnLayout>,
     headless: bool,
     selected: Rc<Vec<Place>>,
@@ -220,6 +335,7 @@ impl DiffViewer {
             syntax: syntax_of(&path),
             path,
             stretches: Rc::new(diff(old, new, CONTEXT)),
+            highlighter: None,
             stat: super::diff::stat(old, new),
             layout: DiffLayout::Unified,
             font_family: None,
@@ -228,6 +344,7 @@ impl DiffViewer {
             line_height: None,
             open: Vec::new(),
             on_open: None,
+            on_close: None,
             on_layout: None,
             headless: false,
             selected: Rc::default(),
@@ -253,6 +370,20 @@ impl DiffViewer {
                 LineKind::Same => (added, removed),
             });
         Self { stretches, stat, ..Self::new(id, path, "", "") }
+    }
+
+    /// Prepares an immutable source-aware highlighter once per stretches identity.
+    ///
+    /// The painter receives the actual side, its one-based source line, and literal
+    /// line text. Split paints unchanged lines for each side; Unified uses New.
+    /// Returning no spans leaves that line plain; omitting this builder retains
+    /// the file's existing lexer. The preparation includes every folded line.
+    pub fn highlighter<H>(mut self, prepare: impl Fn(&[Stretch]) -> H + 'static) -> Self
+    where
+        H: Fn(DiffSide, usize, &str, &App) -> Vec<(Range<usize>, Highlight)> + 'static,
+    {
+        self.highlighter = Some(Rc::new(move |stretches| Rc::new(prepare(stretches))));
+        self
     }
 
     /// Changed lines shown as picked.
@@ -334,6 +465,12 @@ impl DiffViewer {
         self
     }
 
+    /// Runs with the same folded-stretch place when its expanded context closes.
+    pub fn on_close(mut self, handler: impl Fn(usize, &mut Window, &mut App) + 'static) -> Self {
+        self.on_close = Some(Rc::new(handler));
+        self
+    }
+
     /// Runs with the layout picked.
     pub fn on_layout(mut self, handler: impl Fn(DiffLayout, &mut Window, &mut App) + 'static) -> Self {
         self.on_layout = Some(Rc::new(handler));
@@ -400,6 +537,13 @@ impl RenderOnce for DiffViewer {
             let state = state.read(cx);
             (self.scroll.clone().unwrap_or_else(|| state.scroll.clone()), state.viewport.clone())
         };
+        let highlighter = self.highlighter.as_ref().map(|prepare| {
+            if !state.read(cx).highlighter.as_ref().is_some_and(|cached| Rc::ptr_eq(&cached.stretches, &self.stretches)) {
+                let paint = prepare(&self.stretches);
+                state.update(cx, |state, _| state.highlighter = Some(PreparedHighlighter { stretches: self.stretches.clone(), paint }));
+            }
+            state.read(cx).highlighter.as_ref().expect("prepared above").paint.clone()
+        });
         let cached = state.read(cx).measured.as_ref().is_some_and(|cached| {
             Rc::ptr_eq(&cached.stretches, &self.stretches)
                 && cached.family == family
@@ -407,6 +551,11 @@ impl RenderOnce for DiffViewer {
                 && cached.weight == font_weight
                 && cached.line_height == leading
                 && cached.syntax.map(|syntax| syntax as *const Syntax) == self.syntax.map(|syntax| syntax as *const Syntax)
+                && match (&cached.highlighter, &highlighter) {
+                    (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                    (None, None) => true,
+                    _ => false,
+                }
                 && cached.layout == self.layout
                 && cached.open == self.open
         });
@@ -415,16 +564,36 @@ impl RenderOnce for DiffViewer {
             let mut header_width = Pixels::ZERO;
             for row in rows.iter() {
                 match row {
-                    Shown::Line(_, line) => code_width[0] = code_width[0].max(text_width(code(line, &colors, self.syntax, cx), family.clone(), font_size, font_weight, window, cx)),
+                    Shown::Line(_, line) => {
+                        code_width[0] = code_width[0].max(text_width(
+                            code_view(line, unified_side(line), &colors, self.syntax, highlighter.as_deref(), cx),
+                            family.clone(),
+                            font_size,
+                            font_weight,
+                            window,
+                            cx,
+                        ))
+                    }
                     Shown::Pair(left, right) => {
                         for (index, side) in [left, right].into_iter().enumerate() {
                             if let Some((_, line)) = side {
-                                code_width[index + 1] = code_width[index + 1].max(text_width(code(line, &colors, self.syntax, cx), family.clone(), font_size, font_weight, window, cx));
+                                let side = if index == 0 { DiffSide::Old } else { DiffSide::New };
+                                code_width[index + 1] = code_width[index + 1].max(text_width(
+                                    code_view(line, side, &colors, self.syntax, highlighter.as_deref(), cx),
+                                    family.clone(),
+                                    font_size,
+                                    font_weight,
+                                    window,
+                                    cx,
+                                ));
                             }
                         }
                     }
-                    Shown::Header(_, header) => header_width = header_width.max(text_width(header.clone(), family.clone(), font_size, font_weight, window, cx)),
-                    Shown::Fold(_, _) => {}
+                    Shown::Header(_, header, fold) => {
+                        let label = fold.as_ref().map_or_else(|| header.to_string(), |fold| format!("{header} · {}", fold.description));
+                        header_width = header_width.max(text_width(label, family.clone(), font_size, font_weight, window, cx));
+                    }
+                    Shown::Fold(fold) => header_width = header_width.max(text_width(fold.description.clone(), family.clone(), font_size, font_weight, window, cx)),
                 }
             }
             state.update(cx, |state, _| {
@@ -435,6 +604,7 @@ impl RenderOnce for DiffViewer {
                     weight: font_weight,
                     line_height: leading,
                     syntax: self.syntax,
+                    highlighter: highlighter.clone(),
                     layout: self.layout,
                     open: self.open.clone(),
                     code: code_width,
@@ -481,8 +651,9 @@ impl RenderOnce for DiffViewer {
             let pane_viewport = viewport[slot].clone();
             let code_width = code_width[slot];
             let rows = rows.clone();
+            let highlighter = highlighter.clone();
             let (selected, on_line, hunk_action) = (selected.clone(), on_line.clone(), hunk_action.clone());
-            let (id, on_open) = (ElementId::from(pane_id.clone()), self.on_open.clone());
+            let (id, on_open, on_close) = (ElementId::from(pane_id.clone()), self.on_open.clone(), self.on_close.clone());
             let list_scroll = pane_scroll.clone();
             let list_viewport = pane_viewport.clone();
             let list = uniform_list((id.clone(), "rows"), rows.len(), move |range, window, cx| {
@@ -542,13 +713,14 @@ impl RenderOnce for DiffViewer {
                         .child(number(shown))
                         .children(line.map(|(_, line)| {
                             div().relative().flex_1().min_w_0().h_full().overflow_hidden().debug_selector(move || code_selector).child(
-                                div()
-                                    .absolute()
-                                    .left(offset)
-                                    .top((row_height - line_height) / 2.0)
-                                    .h(line_height)
-                                    .whitespace_nowrap()
-                                    .child(code(line, &colors, syntax, cx)),
+                                div().absolute().left(offset).top((row_height - line_height) / 2.0).h(line_height).whitespace_nowrap().child(code_view(
+                                    line,
+                                    if pane_index == 0 { DiffSide::Old } else { DiffSide::New },
+                                    &colors,
+                                    syntax,
+                                    highlighter.as_deref(),
+                                    cx,
+                                )),
                             )
                         }));
                     match line {
@@ -571,7 +743,7 @@ impl RenderOnce for DiffViewer {
                             .when(!split, |row| row.px_2())
                             .when(!split && button, |row| row.items_center());
                         let row = match &rows[ix] {
-                            Shown::Header(stretch, header) => {
+                            Shown::Header(stretch, header, fold) => {
                                 let action = hunk_action.clone().map(|(label, run)| {
                                     let stretch = *stretch;
                                     Button::new((id.clone(), format!("hunk-{stretch}")), label)
@@ -586,7 +758,13 @@ impl RenderOnce for DiffViewer {
                                     .bg(colors.hover)
                                     .items_center()
                                     .text_color(colors.fg_muted)
-                                    .child(div().flex_1().min_w_0().overflow_hidden().child(header.clone()))
+                                    .children(fold.as_ref().map(|fold| fold_control(&id, fold, &on_open, &on_close, row_height, window, cx)))
+                                    .child(div().flex_none().child(header.clone()))
+                                    .children(
+                                        fold.as_ref()
+                                            .map(|fold| div().min_w_0().pl_2().overflow_hidden().text_color(colors.fg_subtle).child(fold.description.clone())),
+                                    )
+                                    .child(div().flex_1())
                                     .children(action)
                                     .into_any_element()
                             }
@@ -602,17 +780,16 @@ impl RenderOnce for DiffViewer {
                                     .child(number(line.old))
                                     .child(number(line.new))
                                     .child(div().flex_none().text_color(colors.fg_subtle).child(sign))
-                                    .child(
-                                        div().debug_selector(|| format!("diff-code-{ix}")).flex_1().min_w_0().overflow_hidden().relative().h_full().child(
-                                            div()
-                                                .absolute()
-                                                .left(offset)
-                                                .top((row_height - line_height) / 2.0)
-                                                .h(line_height)
-                                                .whitespace_nowrap()
-                                                .child(code(line, &colors, syntax, cx)),
-                                        ),
-                                    )
+                                    .child(div().debug_selector(|| format!("diff-code-{ix}")).flex_1().min_w_0().overflow_hidden().relative().h_full().child(
+                                        div().absolute().left(offset).top((row_height - line_height) / 2.0).h(line_height).whitespace_nowrap().child(code_view(
+                                            line,
+                                            unified_side(line),
+                                            &colors,
+                                            syntax,
+                                            highlighter.as_deref(),
+                                            cx,
+                                        )),
+                                    ))
                                     .into_any_element()
                             }
                             Shown::Pair(left, right) => {
@@ -625,31 +802,17 @@ impl RenderOnce for DiffViewer {
                                     })
                                     .into_any_element()
                             }
-                            Shown::Fold(stretch, count) => {
-                                let (open, stretch) = (on_open.clone(), *stretch);
-                                let own = ElementId::from((id.clone(), format!("fold-{stretch}")));
-                                let said = i18n::text(cx, if *count == 1 { "git.diff.unchanged.one" } else { "git.diff.unchanged.other" }, &[("n", &count.to_string())]);
-                                let role = if open.is_some() { Role::Button } else { Role::Label };
-                                row.id(own.clone())
-                                    .role(role)
-                                    .aria_label(said.clone())
-                                    .justify_center()
-                                    .when(split, |row| row.px_2().items_center())
-                                    .bg(colors.hover.opacity(0.5))
-                                    .text_color(colors.fg_subtle)
-                                    .when_some(open, |row, open| {
-                                        let focus = tab_stop((own, "focus").into(), true, window, cx);
-                                        row.tab_index(0)
-                                            .track_focus(&focus)
-                                            .child(focus_frame(focus, colors.focus))
-                                            .cursor_pointer()
-                                            .hover(|row| row.text_color(colors.fg))
-                                            .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
-                                            .on_click(move |_, window, cx| open(stretch, window, cx))
-                                    })
-                                    .child(format!("⋯ {said}"))
-                                    .into_any_element()
-                            }
+                            Shown::Fold(fold) => row
+                                .id(ix)
+                                .when(split, |row| row.px_2())
+                                .role(Role::Heading)
+                                .aria_label(fold.description.clone())
+                                .items_center()
+                                .bg(colors.hover.opacity(0.5))
+                                .text_color(colors.fg_subtle)
+                                .child(fold_control(&id, fold, &on_open, &on_close, row_height, window, cx))
+                                .child(div().min_w_0().overflow_hidden().child(fold.description.clone()))
+                                .into_any_element(),
                         };
                         div().relative().w_full().min_w(extent).h(row_height).child(row).into_any_element()
                     })

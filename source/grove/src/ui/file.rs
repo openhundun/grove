@@ -9,6 +9,7 @@ use std::path::Path;
 /// and folding, displayed depth drives indentation, and file indices retain input order.
 #[derive(Default)]
 pub(super) struct FileTree {
+    scope: PathBuf,
     node_list: Vec<FileTreeNode>,
     flat_index_list: Vec<usize>,
 }
@@ -18,6 +19,7 @@ struct FileTreeNode {
     name: SharedString,
     display: SharedString,
     depth: usize,
+    directory_depth: usize,
     kind: FileTreeNodeKind,
 }
 
@@ -28,10 +30,28 @@ enum FileTreeNodeKind {
 }
 
 impl FileTreeNode {
-    fn new(path: PathBuf, parent: &Path, depth: usize, kind: FileTreeNodeKind) -> Self {
+    fn new(path: PathBuf, parent: &Path, depth: usize, directory_depth: usize, kind: FileTreeNodeKind) -> Self {
         let name = path.strip_prefix(parent).unwrap_or(&path).to_string_lossy().into_owned().into();
         let display = path.to_string_lossy().into_owned().into();
-        Self { path, name, display, depth, kind }
+        Self { path, name, display, depth, directory_depth, kind }
+    }
+
+    fn is_collapsed(&self, scope: &Path, panel: &ListPanelState) -> bool {
+        self.path.ancestors().take(self.directory_depth).any(|path| panel.is_collapsed(scope, path))
+    }
+
+    fn set_collapsed(&self, scope: &Path, panel: &mut ListPanelState, collapsed: bool) {
+        // A compact row represents several logical directories. Closing its head preserves
+        // deeper choices; opening it exposes the whole chain, even after a later split.
+        if collapsed {
+            if let Some(path) = self.path.ancestors().take(self.directory_depth).last() {
+                panel.set_collapsed(scope, path, true);
+            }
+        } else {
+            for path in self.path.ancestors().take(self.directory_depth) {
+                panel.set_collapsed(scope, path, false);
+            }
+        }
     }
 }
 
@@ -45,26 +65,28 @@ impl FileTreeBuilder {
     fn append_to(mut self, parent: &Path, depth: usize, node_list: &mut Vec<FileTreeNode>) {
         for (name, mut directory) in self.directory_map {
             let mut path = parent.join(name);
+            let mut directory_depth = 1;
             while directory.file_list.is_empty() && directory.directory_map.len() == 1 {
                 let (name, child) = directory.directory_map.pop_first().unwrap();
                 path.push(name);
                 directory = child;
+                directory_depth += 1;
             }
             let index = node_list.len();
-            node_list.push(FileTreeNode::new(path.clone(), parent, depth, FileTreeNodeKind::Directory { subtree_end: 0 }));
+            node_list.push(FileTreeNode::new(path.clone(), parent, depth, directory_depth, FileTreeNodeKind::Directory { subtree_end: 0 }));
             directory.append_to(&path, depth + 1, node_list);
             let subtree_end = node_list.len();
             node_list[index].kind = FileTreeNodeKind::Directory { subtree_end };
         }
         self.file_list.sort_unstable_by(|left, right| left.1.cmp(&right.1).then(left.0.cmp(&right.0)));
         for (original_index, path) in self.file_list {
-            node_list.push(FileTreeNode::new(path, parent, depth, FileTreeNodeKind::File { original_index }));
+            node_list.push(FileTreeNode::new(path, parent, depth, 0, FileTreeNodeKind::File { original_index }));
         }
     }
 }
 
 impl FileTree {
-    pub(super) fn from_paths<'a>(path_list: impl IntoIterator<Item = &'a Path>) -> Self {
+    pub(super) fn from_paths<'a>(worktree: &Path, path_list: impl IntoIterator<Item = &'a Path>) -> Self {
         let mut root = FileTreeBuilder::default();
         for (original_index, path) in path_list.into_iter().enumerate() {
             let mut directory = &mut root;
@@ -83,7 +105,17 @@ impl FileTree {
             .filter_map(|(index, node)| matches!(node.kind, FileTreeNodeKind::File { .. }).then_some(index))
             .collect();
         flat_index_list.sort_unstable_by(|left, right| node_list[*left].path.cmp(&node_list[*right].path).then(left.cmp(right)));
-        Self { node_list, flat_index_list }
+        Self { scope: worktree.to_owned(), node_list, flat_index_list }
+    }
+
+    /// Only explicit file selection reveals ancestors; refreshes retain the user's folds.
+    pub(super) fn reveal_file(&self, path: &Path, panel: &mut ListPanelState) {
+        if !panel.query.is_empty() {
+            return;
+        }
+        for directory in path.ancestors().skip(1).take_while(|directory| !directory.as_os_str().is_empty()) {
+            panel.set_collapsed(&self.scope, directory, false);
+        }
     }
 
     fn rows<'a>(&'a self, panel: &'a ListPanelState) -> FileTreeRows<'a> {
@@ -133,7 +165,7 @@ impl<'a> Iterator for FileTreeRows<'a> {
                 }
             } else {
                 self.next = match node.kind {
-                    FileTreeNodeKind::Directory { subtree_end } if self.panel.collapsed_path_set.contains(&node.path) => subtree_end,
+                    FileTreeNodeKind::Directory { subtree_end } if node.is_collapsed(&self.tree.scope, self.panel) => subtree_end,
                     _ => index + 1,
                 };
             }
@@ -155,7 +187,7 @@ impl Grove {
         } else {
             self.settings.changes_panel.indent_size
         };
-        let row_height = typography.row_height();
+        let row_height = typography.row_height().max(18.);
         let title = if is_files {
             "Files"
         } else if self.state().compare {
@@ -210,9 +242,9 @@ impl Grove {
                             .w_full()
                             .h_full()
                             .min_w_0()
-                            .gap(px(6.))
+                            .gap(px(4.))
                             .refine_style(&typography.style())
-                            .child(div().flex_shrink_0().child(icon::file(Path::new("COMMIT_MSG"), 14.)))
+                            .child(div().flex_shrink_0().child(icon::file(Path::new("COMMIT_MSG"), 12.)))
                             .child(div().flex_shrink_0().whitespace_nowrap().child("COMMIT_MSG")),
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -232,7 +264,7 @@ impl Grove {
         for (node_index, node) in file_tree.rows(panel) {
             match node.kind {
                 FileTreeNodeKind::Directory { .. } => {
-                    let collapsed = panel.query.is_empty() && panel.collapsed_path_set.contains(&node.path);
+                    let collapsed = node.is_collapsed(&file_tree.scope, panel);
                     row_list.push(
                         ListItem::new(("dir", node_index))
                             .accessibility_label(node.display.clone())
@@ -247,17 +279,24 @@ impl Grove {
                             .py_0()
                             .rounded_none()
                             .overflow_hidden()
+                            .border_l_2()
+                            .border_color(rgba(0x00000000))
                             .child(
                                 h_flex()
                                     .min_w_0()
-                                    .gap(px(6.))
+                                    .gap(px(4.))
                                     .refine_style(&typography.style())
                                     .child(
-                                        div()
+                                        h_flex()
                                             .flex_shrink_0()
-                                            .child(icon_view(if collapsed { IconName::ChevronRight } else { IconName::ChevronDown }, 10., MUTED)),
+                                            .gap(px(2.))
+                                            .child(div().flex().w(px(14.)).items_center().justify_center().flex_shrink_0().child(icon_view(
+                                                if collapsed { IconName::ChevronRight } else { IconName::ChevronDown },
+                                                12.,
+                                                MUTED,
+                                            )))
+                                            .child(div().flex_shrink_0().child(icon::folder(&node.path, !collapsed, false, 12.))),
                                     )
-                                    .child(div().flex_shrink_0().child(icon::folder(&node.path, !collapsed, false, 14.)))
                                     .child(div().flex_shrink_0().whitespace_nowrap().child(node.name.clone())),
                             )
                             .on_click(cx.listener(move |this, _, _, cx| this.fold_directory(workspace, is_files, node_index, None, cx)))
@@ -284,9 +323,9 @@ impl Grove {
                         .w_full()
                         .h_full()
                         .min_w_0()
-                        .gap(px(6.))
+                        .gap(px(4.))
                         .refine_style(&typography.style())
-                        .child(div().flex_shrink_0().child(icon::file(&node.path, 14.)))
+                        .child(div().flex_shrink_0().child(icon::file(&node.path, 12.)))
                         .child(div().flex_shrink_0().whitespace_nowrap().child(if tree { node.name.clone() } else { node.display.clone() }));
                     if !is_files && let Some(change) = self.view().history_data.as_ref().and_then(|data| data.file_list.get(index)) {
                         if let Some(additions) = change.additions {
@@ -361,17 +400,9 @@ impl Grove {
         let Some(node) = file_tree.node_list.get(node_index) else {
             return;
         };
-        let path = node.path.clone();
         let panel = if is_files { &mut view.state.files_panel } else { &mut view.state.changes_panel };
-        match collapsed {
-            Some(true) => {
-                panel.collapsed_path_set.insert(path);
-            }
-            Some(false) => {
-                panel.collapsed_path_set.remove(&path);
-            }
-            None => panel.toggle_path(path),
-        }
+        let collapsed = collapsed.unwrap_or_else(|| !node.is_collapsed(&file_tree.scope, panel));
+        node.set_collapsed(&file_tree.scope, panel, collapsed);
         cx.notify();
     }
 }
@@ -382,15 +413,17 @@ mod tests {
     use crate::workspace_state::WorkspaceState;
     use core::prelude::v1::test;
 
+    const WORKTREE: &str = "/workspace/worktree";
+
     fn visible_path_list(tree: &FileTree, panel: &ListPanelState) -> Vec<PathBuf> {
         tree.rows(panel).map(|(_, node)| node.path.clone()).collect()
     }
 
     #[test]
     fn single_child_chain_joins_labels_and_uses_displayed_depth() {
-        let tree = FileTree::from_paths(["src/components/目录/file.rs"].into_iter().map(Path::new));
+        let tree = FileTree::from_paths(Path::new(WORKTREE), ["src/components/目录/file.rs"].into_iter().map(Path::new));
         let row_list = tree
-            .rows(&ListPanelState::new(true))
+            .rows(&ListPanelState::new(true, true))
             .map(|(_, node)| (node.path.clone(), node.name.as_ref().to_owned(), node.depth))
             .collect::<Vec<_>>();
         assert_eq!(
@@ -405,8 +438,11 @@ mod tests {
 
     #[test]
     fn compaction_stops_at_branches_and_directories_with_files() {
-        let tree = FileTree::from_paths(["src/left/deep/a.rs", "src/right/deep/b.rs", "src/right/own.rs"].into_iter().map(Path::new));
-        let row_list = tree.rows(&ListPanelState::new(true)).map(|(_, node)| (node.name.as_ref().to_owned(), node.depth)).collect::<Vec<_>>();
+        let tree = FileTree::from_paths(Path::new(WORKTREE), ["src/left/deep/a.rs", "src/right/deep/b.rs", "src/right/own.rs"].into_iter().map(Path::new));
+        let row_list = tree
+            .rows(&ListPanelState::new(true, true))
+            .map(|(_, node)| (node.name.as_ref().to_owned(), node.depth))
+            .collect::<Vec<_>>();
         assert_eq!(
             row_list,
             [
@@ -423,13 +459,13 @@ mod tests {
 
     #[test]
     fn folding_parent_hides_every_descendant_and_preserves_child_fold() {
-        let tree = FileTree::from_paths(["src/deep/nested/file.rs", "src/top.rs", "README.md"].into_iter().map(Path::new));
-        let mut panel = ListPanelState::new(true);
-        panel.toggle_path(PathBuf::from("src/deep/nested"));
-        panel.toggle_path(PathBuf::from("src"));
+        let tree = FileTree::from_paths(Path::new(WORKTREE), ["src/deep/nested/file.rs", "src/top.rs", "README.md"].into_iter().map(Path::new));
+        let mut panel = ListPanelState::new(true, true);
+        tree.node_list[1].set_collapsed(&tree.scope, &mut panel, true);
+        tree.node_list[0].set_collapsed(&tree.scope, &mut panel, true);
         assert_eq!(visible_path_list(&tree, &panel), [PathBuf::from("src"), PathBuf::from("README.md")]);
 
-        panel.toggle_path(PathBuf::from("src"));
+        tree.node_list[0].set_collapsed(&tree.scope, &mut panel, false);
         assert_eq!(
             visible_path_list(&tree, &panel),
             [PathBuf::from("src"), PathBuf::from("src/deep/nested"), PathBuf::from("src/top.rs"), PathBuf::from("README.md")]
@@ -439,7 +475,7 @@ mod tests {
     #[test]
     fn sorted_flat_and_tree_rows_keep_original_file_indices() {
         let path_list = ["z.rs", "src/z.rs", "src/nested/deeper/b.rs", "src/a.rs", "Cargo.toml"];
-        let tree = FileTree::from_paths(path_list.iter().map(Path::new));
+        let tree = FileTree::from_paths(Path::new(WORKTREE), path_list.iter().map(Path::new));
         let file_index_list = |panel: &ListPanelState| {
             tree.rows(panel)
                 .filter_map(|(_, node)| match node.kind {
@@ -451,36 +487,38 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        assert_eq!(file_index_list(&ListPanelState::new(false)), [4, 3, 2, 1, 0]);
-        assert_eq!(file_index_list(&ListPanelState::new(true)), [2, 3, 1, 4, 0]);
+        assert_eq!(file_index_list(&ListPanelState::new(false, true)), [4, 3, 2, 1, 0]);
+        assert_eq!(file_index_list(&ListPanelState::new(true, true)), [2, 3, 1, 4, 0]);
     }
 
     #[test]
     fn folding_and_layout_belong_to_one_panel_in_one_workspace() {
-        let tree = FileTree::from_paths(["src/components/file.rs"].into_iter().map(Path::new));
+        let tree = FileTree::from_paths(Path::new(WORKTREE), ["src/components/file.rs"].into_iter().map(Path::new));
         let mut first = WorkspaceState::default();
         let second = WorkspaceState::default();
         first.changes_panel.tree = true;
-        first.changes_panel.toggle_path(PathBuf::from("src/components"));
+        tree.node_list[0].set_collapsed(&tree.scope, &mut first.changes_panel, false);
         first.repository_panel.tree = false;
 
-        assert_eq!(visible_path_list(&tree, &first.changes_panel), [PathBuf::from("src/components")]);
-        assert_eq!(visible_path_list(&tree, &first.files_panel), [PathBuf::from("src/components"), PathBuf::from("src/components/file.rs")]);
-        assert_eq!(
-            visible_path_list(&tree, &second.files_panel),
-            [PathBuf::from("src/components"), PathBuf::from("src/components/file.rs")]
-        );
+        let expanded_path_list = [PathBuf::from("src/components"), PathBuf::from("src/components/file.rs")];
+        assert_eq!(visible_path_list(&tree, &first.changes_panel), expanded_path_list);
+        assert_eq!(visible_path_list(&tree, &first.files_panel), [PathBuf::from("src/components")]);
+        assert_eq!(visible_path_list(&tree, &second.files_panel), [PathBuf::from("src/components")]);
         assert!(!second.changes_panel.tree);
-        assert!(second.changes_panel.collapsed_path_set.is_empty());
         assert!(second.repository_panel.tree);
-        assert!(first.repository_panel.collapsed_path_set.is_empty());
+        assert!(!first.repository_panel.is_collapsed(Path::new(""), Path::new(WORKTREE)));
+
+        first.changes_panel.tree = false;
+        assert_eq!(visible_path_list(&tree, &first.changes_panel), [PathBuf::from("src/components/file.rs")]);
+        first.changes_panel.tree = true;
+        assert_eq!(visible_path_list(&tree, &first.changes_panel), expanded_path_list);
     }
 
     #[test]
     fn search_keeps_only_matching_ancestors_and_original_file_indices() {
         let path_list = ["src/sibling/skip.rs", "src/Target/deep/Needle.rs", "src/Target/keep.rs", "docs/guide.md", "zNEEDLE.txt"];
-        let tree = FileTree::from_paths(path_list.iter().map(Path::new));
-        let mut panel = ListPanelState::new(true);
+        let tree = FileTree::from_paths(Path::new(WORKTREE), path_list.iter().map(Path::new));
+        let mut panel = ListPanelState::new(true, false);
         panel.query = "needle".into();
         assert_eq!(
             visible_path_list(&tree, &panel),
@@ -522,32 +560,85 @@ mod tests {
 
     #[test]
     fn search_temporarily_exposes_collapsed_matches_and_restores_panel_boundaries() {
-        let tree = FileTree::from_paths(["src/deep/nested/Needle.rs", "src/top.rs", "README.md"].into_iter().map(Path::new));
+        let tree = FileTree::from_paths(Path::new(WORKTREE), ["src/deep/nested/Needle.rs", "src/top.rs", "README.md"].into_iter().map(Path::new));
         let mut first = WorkspaceState::default();
         let second = WorkspaceState::default();
-        first.files_panel.toggle_path(PathBuf::from("src/deep/nested"));
-        first.files_panel.toggle_path(PathBuf::from("src"));
+        tree.node_list[0].set_collapsed(&tree.scope, &mut first.files_panel, false);
         let folded_path_list = visible_path_list(&tree, &first.files_panel);
-        let collapsed_path_set = first.files_panel.collapsed_path_set.clone();
         first.files_panel.query = "needle".into();
         assert_eq!(
             visible_path_list(&tree, &first.files_panel),
             [PathBuf::from("src"), PathBuf::from("src/deep/nested"), PathBuf::from("src/deep/nested/Needle.rs")]
         );
-        assert_eq!(first.files_panel.collapsed_path_set, collapsed_path_set);
+        // Search-time click, Left/Right, and file selection cannot alter the saved folds.
+        tree.node_list[0].set_collapsed(&tree.scope, &mut first.files_panel, true);
+        tree.node_list[1].set_collapsed(&tree.scope, &mut first.files_panel, false);
+        tree.reveal_file(Path::new("src/deep/nested/Needle.rs"), &mut first.files_panel);
         assert!(first.changes_panel.query.is_empty());
         assert!(first.repository_panel.query.is_empty());
         assert!(second.files_panel.query.is_empty());
-        assert_eq!(visible_path_list(&tree, &second.files_panel).len(), 5);
+        assert_eq!(visible_path_list(&tree, &second.files_panel), [PathBuf::from("src"), PathBuf::from("README.md")]);
         first.files_panel.tree = false;
         assert_eq!(visible_path_list(&tree, &first.files_panel), [PathBuf::from("src/deep/nested/Needle.rs")]);
         first.files_panel.tree = true;
         first.files_panel.query.clear();
         assert_eq!(visible_path_list(&tree, &first.files_panel), folded_path_list);
-        assert_eq!(first.files_panel.collapsed_path_set, collapsed_path_set);
         first.files_panel.query = "absent".into();
         assert!(visible_path_list(&tree, &first.files_panel).is_empty());
         first.files_panel.tree = false;
         assert!(visible_path_list(&tree, &first.files_panel).is_empty());
+    }
+
+    #[test]
+    fn newly_arriving_directories_stay_collapsed_and_compact_choices_survive_topology_changes() {
+        let mut panel = ListPanelState::new(true, false);
+        let original = FileTree::from_paths(Path::new(WORKTREE), ["src/components/deep/file.rs", "README.md"].into_iter().map(Path::new));
+        assert_eq!(visible_path_list(&original, &panel), [PathBuf::from("src/components/deep"), PathBuf::from("README.md")]);
+        original.node_list[0].set_collapsed(&original.scope, &mut panel, false);
+
+        let refreshed = FileTree::from_paths(
+            Path::new(WORKTREE),
+            ["src/components/deep/file.rs", "src/other/file.rs", "src/own.rs", "README.md"].into_iter().map(Path::new),
+        );
+        assert_eq!(
+            visible_path_list(&refreshed, &panel),
+            [
+                PathBuf::from("src"),
+                PathBuf::from("src/components/deep"),
+                PathBuf::from("src/components/deep/file.rs"),
+                PathBuf::from("src/other"),
+                PathBuf::from("src/own.rs"),
+                PathBuf::from("README.md"),
+            ]
+        );
+        refreshed.node_list[0].set_collapsed(&refreshed.scope, &mut panel, true);
+        assert_eq!(visible_path_list(&original, &panel), [PathBuf::from("src/components/deep"), PathBuf::from("README.md")]);
+        original.node_list[0].set_collapsed(&original.scope, &mut panel, false);
+        assert_eq!(visible_path_list(&original, &panel).len(), 3);
+
+        let other = FileTree::from_paths(Path::new("/workspace/other"), ["src/components/deep/file.rs"].into_iter().map(Path::new));
+        assert_eq!(visible_path_list(&other, &panel), [PathBuf::from("src/components/deep")]);
+        assert_eq!(visible_path_list(&original, &panel).len(), 3);
+    }
+
+    #[test]
+    fn explicit_file_selection_reveals_only_its_ancestors_without_changing_selection() {
+        let tree = FileTree::from_paths(Path::new(WORKTREE), ["src/deep/selected.rs", "src/sibling/other.rs", "src/own.rs"].into_iter().map(Path::new));
+        let mut state = WorkspaceState { fs_file: 0, file: FileSelection::File(1), ..WorkspaceState::default() };
+        tree.reveal_file(Path::new("src/deep/selected.rs"), &mut state.files_panel);
+        assert_eq!(
+            visible_path_list(&tree, &state.files_panel),
+            [
+                PathBuf::from("src"),
+                PathBuf::from("src/deep"),
+                PathBuf::from("src/deep/selected.rs"),
+                PathBuf::from("src/sibling"),
+                PathBuf::from("src/own.rs")
+            ]
+        );
+        tree.node_list[0].set_collapsed(&tree.scope, &mut state.files_panel, true);
+        assert_eq!(visible_path_list(&tree, &state.files_panel), [PathBuf::from("src")]);
+        assert_eq!(state.fs_file, 0);
+        assert_eq!(state.file, FileSelection::File(1));
     }
 }

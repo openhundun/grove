@@ -69,31 +69,70 @@ impl Grove {
                 .into_any_element();
         };
         if self.state().mode == Mode::Files {
+            let markdown = super::markdown::is_markdown(&file.data.path) && matches!(&file.data.content, FileContent::Text(_));
+            let preview = markdown && file.markdown_preview;
+            let workspace_id = self.view().id;
+            let file_key = self.view().file_key.as_ref().unwrap().clone();
             let head = self
                 .chrome("Preview")
                 .child(div().flex_1())
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .refine_style(&self.settings.files.style())
-                        .child(file.data.path.to_string_lossy().into_owned()),
-                )
+                .when(markdown, |head| {
+                    head.child(
+                        self.icon_button(
+                            "file-markdown-view",
+                            if preview { IconName::Eye } else { IconName::FileCode },
+                            if preview { "Markdown preview; switch to source" } else { "Markdown source; switch to preview" },
+                        )
+                        .toggled(preview)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(file) = this
+                                .workspace_list
+                                .iter_mut()
+                                .find(|workspace| workspace.id == workspace_id)
+                                .and_then(|workspace| workspace.file_map.get_mut(&file_key))
+                            {
+                                file.markdown_preview = !preview;
+                                cx.notify();
+                            }
+                        })),
+                    )
+                })
                 .child(self.refresh_button("refresh-preview", "Refresh file preview", RefreshTarget::File, cx));
-            let body = file
-                .editor
-                .as_ref()
-                .map(|editor| editor_view(editor, cx).into_any_element())
-                .unwrap_or_else(|| self.notice(content_notice(&file.data.content)));
-            return v_flex().size_full().child(head).child(div().flex_1().min_h_0().overflow_hidden().child(body)).into_any_element();
+            let body = match (&file.data.content, preview) {
+                (FileContent::Text(source), true) => div()
+                    .id("file-markdown-preview")
+                    .size_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .p(px(18.))
+                    .bg(rgb(0xffffff))
+                    .child(super::markdown_theme::render(source.clone(), &self.settings.preview))
+                    .into_any_element(),
+                _ => file
+                    .editor
+                    .as_ref()
+                    .map(|editor| editor_view(editor, cx).into_any_element())
+                    .unwrap_or_else(|| self.notice(content_notice(&file.data.content))),
+            };
+            let annotation = file.editor.as_ref().map(|editor| self.file_blame(file, editor.read(cx).position().0, preview));
+            return v_flex()
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .overflow_hidden()
+                .child(head)
+                .children(annotation)
+                .child(div().flex_1().min_w_0().min_h_0().overflow_hidden().child(body))
+                .into_any_element();
         }
         let split = self.state().split;
         let full = self.state().diff_full;
         let workspace_id = self.view().id;
         let file_key = self.view().file_key.as_ref().unwrap().clone();
+        let close_file_key = file_key.clone();
         let owner = cx.entity().downgrade();
+        let close_owner = owner.clone();
         let workspace = self.active;
         let head = self
             .chrome("Diff")
@@ -114,7 +153,7 @@ impl Grove {
             .child(
                 self.icon_button(
                     "diff-context",
-                    if full { IconName::ChevronUp } else { IconName::ChevronDown },
+                    if full { IconName::Minimize2 } else { IconName::ChevronsUpDown },
                     if full { "Full diff; collapse unchanged lines" } else { "Collapsed diff; expand unchanged lines" },
                 )
                 .toggled(full)
@@ -145,6 +184,10 @@ impl Grove {
                             .on_open(move |stretch, _, cx| {
                                 let _ = owner.update(cx, |this, cx| this.open_diff_context(workspace_id, &file_key, stretch, cx));
                             })
+                            .on_close(move |stretch, _, cx| {
+                                let _ = close_owner.update(cx, |this, cx| this.close_diff_context(workspace_id, &close_file_key, stretch, cx));
+                            })
+                            .when(super::markdown::is_markdown(&file.data.path), |viewer| viewer.highlighter(super::markdown::diff_highlighter))
                             .font_family(self.settings.editor.font_family.clone())
                             .font_size(self.settings.editor.font_size)
                             .font_weight(FontWeight(f32::from(self.settings.editor.font_weight)))
@@ -191,6 +234,38 @@ impl Grove {
             .child(div().flex_1().min_w_0().min_h_0().overflow_hidden().child(body))
             .into_any_element()
     }
+
+    fn file_blame(&self, file: &FileView, line: usize, preview: bool) -> AnyElement {
+        let blame = file.data.blame.get(line.saturating_sub(1)).filter(|blame| blame.line == line);
+        let attribution = match blame {
+            Some(blame) if blame.uncommitted => "Uncommitted working-tree content".to_owned(),
+            Some(blame) => format!("{} · {} · {} · {}", blame.oid.chars().take(12).collect::<String>(), blame.author, blame_time(blame.time), blame.summary),
+            None => "No attribution for this source line".to_owned(),
+        };
+        let label = format!("{} {line} · {attribution}", if preview { "Selected source line" } else { "Source line" });
+        v_flex()
+            .flex_shrink_0()
+            .min_w_0()
+            .overflow_hidden()
+            .px(px(8.))
+            .py(px(4.))
+            .gap(px(2.))
+            .border_b_1()
+            .border_color(rgb(BORDER))
+            .refine_style(&self.settings.secondary_ui_style())
+            .text_color(rgb(MUTED))
+            .child(
+                div()
+                    .id("file-line-blame")
+                    .role(Role::Label)
+                    .aria_label(label.clone())
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .child(label),
+            )
+            .children(file.data.blame_notice.as_ref().map(|notice| div().child(notice.clone())))
+            .into_any_element()
+    }
 }
 
 fn editor_view(editor: &Entity<CodeEditor>, cx: &App) -> impl IntoElement {
@@ -201,6 +276,23 @@ fn editor_view(editor: &Entity<CodeEditor>, cx: &App) -> impl IntoElement {
             .inset_0()
             .child(Scrollbar::new(&scroll_handle).id(("editor-scrollbar", editor.entity_id())).mode(ScrollbarMode::Always)),
     )
+}
+
+fn blame_time(timestamp: i64) -> String {
+    // Gregorian civil date from days since Unix epoch; keep the recorded instant
+    // explicit in UTC without introducing a date/time dependency for one label.
+    let days = timestamp.div_euclid(86_400) + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days - era * 146_097;
+    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month + 2) / 5 + 1;
+    let month = month + if month < 10 { 3 } else { -9 };
+    let year = year + i64::from(month <= 2);
+    let second = timestamp.rem_euclid(86_400);
+    format!("{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02} UTC", second / 3600, second / 60 % 60, second % 60)
 }
 fn content_notice(content: &FileContent) -> String {
     match content {

@@ -13,6 +13,44 @@ pub const QUIT_KEY: &str = "cmd-q";
 pub const MODE_KEY_LIST: [&str; 4] = ["cmd-1", "cmd-2", "cmd-3", "cmd-4"];
 pub const MODE_LABEL_LIST: [&str; 4] = ["Changes and diff · ⌘1", "Files and preview · ⌘2", "Terminal sessions · ⌘3", "Repositories and commits · ⌘4"];
 
+#[derive(Default)]
+#[repr(C)]
+struct MachTimeValue {
+    seconds: i32,
+    microseconds: i32,
+}
+
+// Matches mach_task_basic_info in the macOS SDK's mach/task_info.h, including its pack(4).
+#[derive(Default)]
+#[repr(C, packed(4))]
+struct MachTaskBasicInfo {
+    virtual_size: u64,
+    resident_size: u64,
+    resident_size_max: u64,
+    user_time: MachTimeValue,
+    system_time: MachTimeValue,
+    policy: i32,
+    suspend_count: i32,
+}
+
+unsafe extern "C" {
+    static mach_task_self_: u32;
+    fn task_info(target_task: u32, flavor: u32, task_info_out: *mut i32, task_info_out_count: *mut u32) -> i32;
+}
+
+/// Returns the current process's resident memory in bytes, not its historical maximum.
+pub fn resident_memory_bytes() -> Option<u64> {
+    const MACH_TASK_BASIC_INFO: u32 = 20;
+    const KERN_SUCCESS: i32 = 0;
+    const INFO_COUNT: u32 = (std::mem::size_of::<MachTaskBasicInfo>() / std::mem::size_of::<u32>()) as u32;
+    let mut info = MachTaskBasicInfo::default();
+    let mut count = INFO_COUNT;
+    // SAFETY: libSystem initializes mach_task_self_ for this process. The SDK-compatible
+    // structure is writable for count 32-bit words, and task_info does not retain either pointer.
+    let result = unsafe { task_info(mach_task_self_, MACH_TASK_BASIC_INFO, std::ptr::from_mut(&mut info).cast(), &mut count) };
+    if result == KERN_SUCCESS && count == INFO_COUNT { Some(info.resident_size) } else { None }
+}
+
 pub fn read_only_git_command(path: &Path) -> Command {
     let mut command = Command::new("/usr/bin/sandbox-exec");
     command.args([

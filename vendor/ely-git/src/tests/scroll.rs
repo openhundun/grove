@@ -52,6 +52,7 @@ fn lines(count: usize, long: bool) -> Rc<Vec<Stretch>> {
                 old: (kind == LineKind::Removed).then_some(ix + 1),
                 new: (kind == LineKind::Added).then_some(ix + 1),
                 text: if long && ix == count - 1 { format!("{}END", "x".repeat(width)).into() } else { "short".into() },
+                no_newline: false,
                 words: Vec::new(),
             });
         }
@@ -250,4 +251,99 @@ fn split_links_both_axes_and_clamps_each_pane_without_feedback(cx: &mut TestAppC
     assert_eq!(right.max_offset(), point(Pixels::ZERO, Pixels::ZERO));
     assert_eq!(left.offset(), point(Pixels::ZERO, Pixels::ZERO));
     assert_eq!(right.offset(), point(Pixels::ZERO, Pixels::ZERO));
+}
+
+struct FoldingDiff {
+    stretches: Rc<Vec<Stretch>>,
+    layout: DiffLayout,
+    open: Vec<usize>,
+    prepares: Rc<std::cell::Cell<usize>>,
+    painted: Rc<std::cell::RefCell<Vec<(crate::DiffSide, usize, String)>>>,
+}
+
+impl Render for FoldingDiff {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let open_owner = cx.entity();
+        let close_owner = open_owner.clone();
+        let prepares = self.prepares.clone();
+        let painted = self.painted.clone();
+        div().w(px(600.0)).h(px(600.0)).child(
+            DiffViewer::from_stretches("fold-test", "file.md", self.stretches.clone())
+                .headless()
+                .layout(self.layout)
+                .font_size(10.0)
+                .line_height(1.0)
+                .open(self.open.iter().copied())
+                .on_open(move |stretch, _, cx| {
+                    open_owner.update(cx, |view, cx| {
+                        view.open.push(stretch);
+                        cx.notify();
+                    })
+                })
+                .on_close(move |stretch, _, cx| {
+                    close_owner.update(cx, |view, cx| {
+                        view.open.retain(|open| *open != stretch);
+                        cx.notify();
+                    })
+                })
+                .highlighter(move |_| {
+                    prepares.set(prepares.get() + 1);
+                    let painted = painted.clone();
+                    move |side, number, text: &str, _: &gpui::App| {
+                        painted.borrow_mut().push((side, number, text.to_owned()));
+                        Vec::new()
+                    }
+                }),
+        )
+    }
+}
+
+#[gpui::test]
+fn inline_context_recollapses_across_layouts_and_reuses_source_preparation(cx: &mut TestAppContext) {
+    cx.update(Theme::init);
+    let old = (1..=20).map(|number| format!("line {number}\n")).collect::<String>();
+    let new = old.replacen("line 10\n", "changed 10\n", 1);
+    let (view, cx) = cx.add_window_view(|_, _| FoldingDiff {
+        stretches: Rc::new(crate::diff(&old, &new, 1)),
+        layout: DiffLayout::Unified,
+        open: Vec::new(),
+        prepares: Rc::default(),
+        painted: Rc::default(),
+    });
+    for layout in [DiffLayout::Unified, DiffLayout::Split] {
+        view.update(cx, |view, cx| {
+            view.layout = layout;
+            cx.notify();
+        });
+        draw(cx);
+        for stretch in [0, 2] {
+            let selector = if stretch == 0 { "diff-fold-0" } else { "diff-fold-2" };
+            let control = cx.debug_bounds(selector).expect("leading and trailing contexts have controls");
+            cx.simulate_click(control.center(), gpui::Modifiers::none());
+            draw(cx);
+            assert!(view.read_with(cx, |view, _| view.open.contains(&stretch)));
+            let control = cx.debug_bounds(selector).expect("expanded context retains its close control");
+            cx.simulate_click(control.center(), gpui::Modifiers::none());
+            draw(cx);
+            assert!(!view.read_with(cx, |view, _| view.open.contains(&stretch)));
+        }
+    }
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.prepares.get(), 1, "layout and fold changes reuse the prepared source");
+        let painted = view.painted.borrow();
+        for expected in [
+            (crate::DiffSide::Old, 10, "line 10"),
+            (crate::DiffSide::New, 10, "changed 10"),
+            (crate::DiffSide::Old, 1, "line 1"),
+            (crate::DiffSide::New, 20, "line 20"),
+        ] {
+            assert!(painted.iter().any(|(side, line, text)| (*side, *line, text.as_str()) == expected), "missing {expected:?}");
+        }
+    });
+    view.update(cx, |view, cx| {
+        view.stretches = Rc::new(crate::diff("old\n", "new\n", 1));
+        cx.notify();
+    });
+    draw(cx);
+    assert_eq!(view.read_with(cx, |view, _| view.prepares.get()), 2);
 }

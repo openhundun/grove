@@ -351,3 +351,140 @@ fn binary_sides_and_forced_binary_patches_are_not_displayed_as_text() {
         assert!(data.notice.as_deref().unwrap().contains("Binary"), "{name}");
     }
 }
+
+#[test]
+fn filesystem_blame_maps_committed_and_modified_utf8_working_lines() {
+    let fixture = GitFixture::new();
+    let name = "space 名\nfile.txt";
+    let original = "unchanged α\nreplace me\nunchanged 終\nlast without newline";
+    fixture.write(name, original);
+    let oid = fixture.commit("initial UTF-8 summary 摘要");
+    let unchanged = file(&fixture.path, &fixture.path, None, Path::new(name)).unwrap();
+    assert!(unchanged.blame_notice.is_none(), "{:?}", unchanged.blame_notice);
+    assert_eq!(unchanged.blame.iter().map(|line| line.line).collect::<Vec<_>>(), vec![1, 2, 3, 4]);
+    for line in &unchanged.blame {
+        assert_eq!(line.oid, oid);
+        assert_eq!(line.author, "Grove Fixture");
+        assert_eq!(line.summary, "initial UTF-8 summary 摘要");
+        assert_eq!(line.time, 0);
+        assert!(!line.uncommitted);
+    }
+    let modified = "inserted 新\nunchanged α\nmodified β\nunchanged 終\nlast without newline";
+    fixture.write(name, modified);
+    let data = file(&fixture.path, &fixture.path, None, Path::new(name)).unwrap();
+    assert!(matches!(&data.content, FileContent::Text(source) if source.as_ref() == modified));
+    assert!(data.patch.is_none());
+    assert!(data.notice.is_none());
+    assert!(data.blame_notice.is_none(), "{:?}", data.blame_notice);
+    assert_eq!(data.blame.iter().map(|line| line.line).collect::<Vec<_>>(), vec![1, 2, 3, 4, 5]);
+    for (index, line) in data.blame.iter().enumerate() {
+        let uncommitted = matches!(index, 0 | 2);
+        assert_eq!(line.uncommitted, uncommitted);
+        if uncommitted {
+            assert_eq!(line.oid, "0".repeat(oid.len()));
+            assert_eq!(line.author, "Not Committed Yet");
+        } else {
+            assert_eq!(line.oid, oid);
+            assert_eq!(line.author, "Grove Fixture");
+            assert_eq!(line.summary, "initial UTF-8 summary 摘要");
+            assert_eq!(line.time, 0);
+        }
+    }
+    for revision in [Revision::Unstaged, Revision::Staged, Revision::Commit(oid), Revision::Comparison("HEAD".into())] {
+        let data = fixture.file(revision, name);
+        assert!(data.blame.is_empty());
+        assert!(data.blame_notice.is_none());
+    }
+}
+
+#[test]
+fn filesystem_blame_explains_unborn_and_untracked_files_without_attribution() {
+    let fixture = GitFixture::new();
+    let name = "new file 名.txt";
+    fixture.write(name, "no historical author\n");
+    fixture.git(&["add", "--", name]);
+    let unborn = file(&fixture.path, &fixture.path, None, Path::new(name)).unwrap();
+    assert!(unborn.blame.is_empty());
+    assert!(unborn.blame_notice.as_deref().unwrap().contains("HEAD commit"));
+    fixture.commit("root");
+    fixture.write("untracked name.txt", "not committed\n");
+    let untracked = file(&fixture.path, &fixture.path, None, Path::new("untracked name.txt")).unwrap();
+    assert!(untracked.blame.is_empty());
+    assert!(untracked.blame_notice.as_deref().unwrap().contains("untracked"));
+    assert!(matches!(untracked.content, FileContent::Text(_)));
+}
+
+#[test]
+fn filesystem_blame_follows_indexed_renames_and_explains_untracked_renames() {
+    let fixture = GitFixture::new();
+    let source = "first tracked line\nsecond tracked line\n";
+    fixture.write("old name.txt", source);
+    let oid = fixture.commit("rename origin");
+    std::fs::rename(fixture.path.join("old name.txt"), fixture.path.join("new 名 name.txt")).unwrap();
+    let untracked = file(&fixture.path, &fixture.path, None, Path::new("new 名 name.txt")).unwrap();
+    assert!(untracked.blame.is_empty());
+    assert!(untracked.blame_notice.as_deref().unwrap().contains("renames not recorded in the index"));
+    fixture.git(&["add", "--all"]);
+    let indexed = file(&fixture.path, &fixture.path, None, Path::new("new 名 name.txt")).unwrap();
+    assert!(indexed.blame_notice.is_none(), "{:?}", indexed.blame_notice);
+    assert_eq!(indexed.blame.len(), 2);
+    for line in &indexed.blame {
+        assert_eq!(line.oid, oid);
+        assert_eq!(line.summary, "rename origin");
+        assert!(!line.uncommitted);
+    }
+}
+
+#[test]
+fn filesystem_blame_explains_binary_deleted_and_oversize_content() {
+    let fixture = GitFixture::new();
+    fixture.write("binary.bin", b"binary\0content\n");
+    fixture.write("deleted.txt", "deleted working text\n");
+    fixture.commit("root");
+    std::fs::remove_file(fixture.path.join("deleted.txt")).unwrap();
+    fixture.write("large.txt", vec![b'x'; fs::MAX_TEXT_BYTES as usize + 1]);
+    for (name, notice) in [("binary.bin", "binary"), ("deleted.txt", "deleted"), ("large.txt", "2 MiB")] {
+        let data = file(&fixture.path, &fixture.path, None, Path::new(name)).unwrap();
+        assert!(data.blame.is_empty(), "{name}");
+        assert!(data.blame_notice.as_deref().unwrap().contains(notice), "{name}: {:?}", data.blame_notice);
+    }
+}
+
+#[test]
+fn filesystem_blame_uses_loaded_stdin_text_and_handles_a_near_limit_line() {
+    let fixture = GitFixture::new();
+    fixture.write("captured.txt", "unchanged\nold text\n");
+    let oid = fixture.commit("root");
+    fixture.write("captured.txt", "a later filesystem version\n");
+    let captured = "unchanged\ncaptured UTF-8 新 text\n";
+    let data = blame(&fixture.path, Path::new("captured.txt"), captured).unwrap();
+    assert_eq!(data.len(), 2);
+    assert_eq!(data[0].oid, oid);
+    assert!(!data[0].uncommitted);
+    assert_eq!(data[1].line, 2);
+    assert!(data[1].uncommitted);
+    let long_source = "x".repeat(fs::MAX_TEXT_BYTES as usize - 1);
+    fixture.write("captured.txt", &long_source);
+    let data = file(&fixture.path, &fixture.path, None, Path::new("captured.txt")).unwrap();
+    assert!(data.blame_notice.is_none(), "{:?}", data.blame_notice);
+    assert_eq!(data.blame.len(), 1);
+    assert_eq!(data.blame[0].line, 1);
+    assert!(data.blame[0].uncommitted);
+}
+
+#[test]
+fn blame_parser_preserves_crlf_and_rejects_transformed_or_incomplete_mapping() {
+    let oid = "1".repeat(40);
+    let record = format!("{oid} 9 1 1\nauthor UTF-8 作者\nauthor-time 123\nsummary retained summary 摘要\nfilename \"space\\nname.txt\"\n\tfirst\r\n");
+    let data = parse_blame(&mut record.as_bytes(), "first\r\n").unwrap();
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].line, 1);
+    assert_eq!(data[0].oid, oid);
+    assert_eq!(data[0].author, "UTF-8 作者");
+    assert_eq!(data[0].summary, "retained summary 摘要");
+    assert_eq!(data[0].time, 123);
+    assert!(parse_blame(&mut record.as_bytes(), "first\n").unwrap_err().contains("transformed"));
+    assert!(parse_blame(&mut record.as_bytes(), "first\r\nsecond\n").unwrap_err().contains("fewer lines"));
+    let shifted = record.replacen(" 9 1 1\n", " 9 2 1\n", 1);
+    assert!(parse_blame(&mut shifted.as_bytes(), "first\r\n").unwrap_err().contains("line numbers"));
+}

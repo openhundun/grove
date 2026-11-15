@@ -14,6 +14,8 @@ use futures::channel::mpsc::UnboundedReceiver;
 use futures::channel::mpsc::UnboundedSender;
 use futures::channel::mpsc::unbounded;
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -47,13 +49,35 @@ pub(crate) struct Session {
     pub term: Arc<FairMutex<Term<Listener>>>,
     pub pty: Option<Notifier>,
     pub events: UnboundedReceiver<Event>,
+    #[cfg(unix)]
+    pub process: Option<Process>,
+}
+
+/// Keep an owned master descriptor: the event loop can close its copy without reusing ours.
+#[cfg(unix)]
+pub(crate) struct Process {
+    pub child_pid: u32,
+    master: File,
+}
+
+#[cfg(unix)]
+impl Process {
+    pub(crate) fn foreground_group(&self) -> std::io::Result<u32> {
+        rustix::termios::tcgetpgrp(&self.master).map(|pid| pid.as_raw_pid() as u32).map_err(Into::into)
+    }
 }
 
 /// A grid no process feeds, for replayed output.
 pub(crate) fn detached(size: TermSize) -> Session {
     let (sender, events) = unbounded();
     let term = Term::new(Config::default(), &size, Listener(sender));
-    Session { term: Arc::new(FairMutex::new(term)), pty: None, events }
+    Session {
+        term: Arc::new(FairMutex::new(term)),
+        pty: None,
+        events,
+        #[cfg(unix)]
+        process: None,
+    }
 }
 
 /// Starts `launch` on a pseudo-terminal of `size` cells, each `cell` pixels.
@@ -80,11 +104,19 @@ pub(crate) fn spawn(launch: &Launch, size: TermSize, cell: (u16, u16)) -> anyhow
         escape_args: true,
     };
     let pty = tty::new(&options, window_size(&size, cell), 0)?;
+    #[cfg(unix)]
+    let process = Process { child_pid: pty.child().id(), master: pty.file().try_clone()? };
     let event_loop = EventLoop::new(term.clone(), listener, pty, true, false)?;
     let pty = Notifier(event_loop.channel());
     event_loop.spawn();
     log::info!("terminal: started {:?}", launch.program);
-    Ok(Session { term, pty: Some(pty), events })
+    Ok(Session {
+        term,
+        pty: Some(pty),
+        events,
+        #[cfg(unix)]
+        process: Some(process),
+    })
 }
 
 pub(crate) fn window_size(size: &TermSize, cell: (u16, u16)) -> WindowSize {

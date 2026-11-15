@@ -27,6 +27,7 @@ use futures::StreamExt;
 use gpui::App;
 use gpui::ClipboardItem;
 use gpui::Context;
+use gpui::Entity;
 use gpui::EventEmitter;
 use gpui::FocusHandle;
 use gpui::Focusable;
@@ -64,8 +65,8 @@ const HIDE_CURSOR: &[u8] = b"\x1b[?25l";
 /// Platforms: macOS, Windows, Linux.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TerminalEvent {
-    /// The program set its title.
-    Title(SharedString),
+    /// The program set its OSC title, or reset it to the host's automatic title.
+    Title(Option<SharedString>),
     /// The program ended.
     Exited(ExitStatus),
     /// The program rang the bell.
@@ -91,8 +92,10 @@ pub enum TerminalEvent {
 pub struct Terminal {
     pub(crate) term: Arc<FairMutex<Term<Listener>>>,
     pub(crate) pty: Option<Notifier>,
+    #[cfg(unix)]
+    process: Option<pty::Process>,
     pub(crate) focus: FocusHandle,
-    title: SharedString,
+    title: Option<SharedString>,
     exited: Option<ExitStatus>,
     font_family: Option<SharedString>,
     font_size: Option<f32>,
@@ -125,11 +128,11 @@ impl Focusable for Terminal {
 }
 
 impl Terminal {
-    /// Starts `launch` on a pseudo-terminal; the first layout sizes its grid to the box.
-    pub fn spawn(launch: Launch, cx: &mut Context<Self>) -> anyhow::Result<Self> {
+    /// Starts a fallible launch without constructing an inert terminal entity on failure.
+    pub fn spawn(launch: Launch, cx: &mut App) -> anyhow::Result<Entity<Self>> {
         let size = (80, 24);
         let session = pty::spawn(&launch, TermSize::new(size.0, size.1), (8, 16))?;
-        Ok(Self::new(session, size, "Terminal".into(), cx))
+        Ok(cx.new(move |cx| Self::new(session, size, cx)))
     }
 
     /// Output recorded elsewhere, escape codes and all, on a grid of `columns` by `lines` no process feeds.
@@ -141,11 +144,15 @@ impl Terminal {
             parser.advance(&mut *term, bytes);
             parser.advance(&mut *term, HIDE_CURSOR);
         }
-        Self::new(session, (columns, lines), "Output".into(), cx)
+        Self::new(session, (columns, lines), cx)
     }
 
-    fn new(session: Session, size: (usize, usize), title: SharedString, cx: &mut Context<Self>) -> Self {
-        let Session { term, pty, mut events } = session;
+    fn new(session: Session, size: (usize, usize), cx: &mut Context<Self>) -> Self {
+        let term = session.term;
+        let pty = session.pty;
+        let mut events = session.events;
+        #[cfg(unix)]
+        let process = session.process;
         let task = cx.spawn(async move |this, cx| {
             while let Some(first) = events.next().await {
                 let mut batch = vec![first];
@@ -160,8 +167,10 @@ impl Terminal {
         Self {
             term,
             pty,
+            #[cfg(unix)]
+            process,
             focus: cx.focus_handle().tab_stop(true),
-            title,
+            title: None,
             exited: None,
             font_family: None,
             font_size: None,
@@ -233,9 +242,21 @@ impl Terminal {
         cx.notify();
     }
 
-    /// The title the program set.
-    pub fn title(&self) -> &SharedString {
-        &self.title
+    /// The actual OSC title; `None` means no program title or an explicit ResetTitle.
+    pub fn title(&self) -> Option<&SharedString> {
+        self.title.as_ref()
+    }
+
+    /// The launched shell's PID while this grid owns its PTY metadata.
+    #[cfg(unix)]
+    pub fn process_id(&self) -> Option<u32> {
+        self.process.as_ref().map(|process| process.child_pid)
+    }
+
+    /// The PTY's actual foreground process group, without guessing from the shell PID.
+    #[cfg(unix)]
+    pub fn foreground_process_group_id(&self) -> std::io::Result<Option<u32>> {
+        self.process.as_ref().map(pty::Process::foreground_group).transpose()
     }
 
     /// How the program ended, once it has.
@@ -246,6 +267,10 @@ impl Terminal {
     /// Releases this grid's PTY even while a rendered frame still holds the terminal entity.
     /// The reader's shutdown drops the platform PTY, which stops and reaps its child program.
     pub fn shutdown(&mut self) {
+        #[cfg(unix)]
+        {
+            self.process = None;
+        }
         if let Some(pty) = self.pty.take()
             && pty.0.send(alacritty_terminal::event_loop::Msg::Shutdown).is_err()
         {
@@ -312,11 +337,11 @@ impl Terminal {
             match event {
                 Event::Wakeup | Event::MouseCursorDirty | Event::CursorBlinkingChange => {}
                 Event::Title(title) => {
-                    self.title = title.into();
+                    self.title = (!title.trim().is_empty()).then(|| title.into());
                     cx.emit(TerminalEvent::Title(self.title.clone()));
                 }
                 Event::ResetTitle => {
-                    self.title = "Terminal".into();
+                    self.title = None;
                     cx.emit(TerminalEvent::Title(self.title.clone()));
                 }
                 Event::Bell => {
@@ -342,6 +367,10 @@ impl Terminal {
                 Event::ChildExit(status) => {
                     log::info!("terminal: the program ended, {status}");
                     self.exited = Some(status);
+                    #[cfg(unix)]
+                    {
+                        self.process = None;
+                    }
                     cx.emit(TerminalEvent::Exited(status));
                 }
                 Event::Exit => log::info!("terminal: the grid closed"),
@@ -410,7 +439,7 @@ impl Render for Terminal {
         let root = div()
             .id(("terminal", cx.entity_id()))
             .role(Role::Terminal)
-            .aria_label(self.title.clone())
+            .aria_label(self.title.clone().unwrap_or_else(|| "Terminal".into()))
             .key_context(input::CONTEXT)
             .track_focus(&self.focus)
             .size_full()

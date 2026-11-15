@@ -225,9 +225,10 @@ impl SettingsPanel {
                     .min_w(px(160.))
                     .flex()
                     .flex_col()
+                    .items_start()
                     .gap(px(4.))
-                    .child(div().refine_style(&ui_style).child(title))
-                    .child(div().refine_style(&secondary_style).text_color(cx.theme().colors.fg_muted).child(description)),
+                    .child(div().w_full().text_left().refine_style(&ui_style).child(title))
+                    .child(div().w_full().text_left().refine_style(&secondary_style).text_color(cx.theme().colors.fg_muted).child(description)),
             )
             .child(div().w(px(280.)).max_w_full().min_w_0().refine_style(&secondary_style).child(control))
             .into_any_element()
@@ -289,8 +290,8 @@ impl Render for SettingsPanel {
             .flex()
             .flex_col()
             .refine_style(&secondary_style)
-            .child(div().refine_style(&ui_style).child(title))
-            .child(div().mt(px(4.)).mb(px(8.)).refine_style(&secondary_style).text_color(muted).child(description))
+            .child(div().w_full().text_left().refine_style(&ui_style).child(title))
+            .child(div().w_full().text_left().mt(px(4.)).mb(px(8.)).refine_style(&secondary_style).text_color(muted).child(description))
             .child(self.row("Font family", "Search installed font families.", picker, cx))
             .child(self.row("Font size", "Text size in pixels, from 6 to 72.", size, cx))
             .child(self.row("Font weight", "Weight from 100 (thin) to 900 (black).", weight, cx))
@@ -362,7 +363,7 @@ impl Render for SettingsPanel {
                             .children(SECTION_LIST.into_iter().map(|(candidate, key, title, _)| {
                                 Button::new((ElementId::from("settings-category"), key))
                                     .accessibility_label(title)
-                                    .child(div().refine_style(&ui_style).child(title))
+                                    .child(div().w_full().text_left().refine_style(&ui_style).child(title))
                                     .ghost()
                                     .selected(candidate == target)
                                     .w_full()

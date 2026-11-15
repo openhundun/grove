@@ -14,7 +14,7 @@ fn active_after_close(active: usize, closed: usize, count: usize) -> Option<usiz
 impl Grove {
     /// Browser-style workspace tabs share the native titlebar with traffic lights and empty drag space.
     pub(super) fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        TitleBar::new().h(px(TITLE_HEIGHT)).bg(rgb(SURFACE)).border_color(rgb(BORDER)).child(
+        TitleBar::new().h(px(CHROME)).bg(rgb(SURFACE)).border_color(rgb(BORDER)).child(
             h_flex()
                 .size_full()
                 .items_center()
@@ -40,7 +40,7 @@ impl Grove {
                                         .aria_label(label.clone())
                                         .aria_selected(index == self.active)
                                         .tab_stop(true)
-                                        .h(px(RAIL_WIDTH))
+                                        .h(px(CHROME))
                                         .min_w(px(72.))
                                         .max_w(px(200.))
                                         .px(px(8.))
@@ -70,7 +70,7 @@ impl Grove {
                                                 .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                                 .child(
                                                     Button::new(("close-workspace", workspace_id))
-                                                        .icon(IconName::X)
+                                                        .child(icon_view(IconName::X, 12., SECONDARY))
                                                         .accessibility_label(close_label)
                                                         .ghost()
                                                         .xsmall()
@@ -99,10 +99,23 @@ impl Grove {
                                 .flex_shrink_0()
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                                .child(self.icon_button("add-workspace", IconName::Plus, "Add workspace").on_click(cx.listener(|this, _, window, cx| {
-                                    cx.stop_propagation();
-                                    this.add_workspace(window, cx);
-                                }))),
+                                .child(
+                                    Button::new("add-workspace")
+                                        .child(icon_view(IconName::Plus, 12., SECONDARY))
+                                        .accessibility_label("Add workspace")
+                                        .ghost()
+                                        .xsmall()
+                                        .w(px(24.))
+                                        .h(px(CHROME))
+                                        .p_0()
+                                        .rounded_none()
+                                        .flex_shrink_0()
+                                        .refine_style(&self.settings.ui.style())
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            cx.stop_propagation();
+                                            this.add_workspace(window, cx);
+                                        })),
+                                ),
                         ),
                 )
                 .child(div().flex_1().min_w(px(32.)).h_full()),
@@ -120,7 +133,7 @@ impl Grove {
     /// Closing is atomic after confirmation: cancellation leaves tab state and its PTYs untouched.
     fn close_workspace(&mut self, workspace_id: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(index) = workspace_index(&self.workspace_list, workspace_id) else { return };
-        if !self.workspace_list[index].session_map.values().any(|session| session.is_live(cx)) {
+        if !self.workspace_list[index].session_list.iter().any(|session| session.is_live(cx)) {
             self.finish_close_workspace(workspace_id, window, cx);
             return;
         }
@@ -144,7 +157,7 @@ impl Grove {
         let next_active = active_after_close(self.active, index, self.workspace_list.len());
         let view = &mut self.workspace_list[index];
         view.task = None;
-        for session in view.session_map.values_mut() {
+        for session in view.session_list.iter_mut() {
             session.dispose(cx);
         }
         // Keep the final view valid until the native window releases its root; never render an empty list.
@@ -210,7 +223,7 @@ impl Grove {
                 .id(("mode", index))
                 .role(Role::Button)
                 .aria_label(label)
-                .size(px(RAIL_WIDTH))
+                .size(px(CHROME))
                 .flex_shrink_0()
                 .flex()
                 .items_center()
@@ -226,12 +239,12 @@ impl Grove {
                         .border_1()
                         .border_color(rgb(if selected { 0xa9c8ed } else { SURFACE }))
                         .when(selected, |this| this.bg(rgb(SELECT)))
-                        .child(icon_view(icon, 15., if selected { ACCENT } else { MUTED })),
+                        .child(icon_view(icon, 16., if selected { ACCENT } else { MUTED })),
                 )
         };
         v_flex()
             .relative()
-            .w(px(RAIL_WIDTH))
+            .w(px(CHROME))
             .h_full()
             .flex_shrink_0()
             .bg(rgb(SURFACE))
@@ -268,47 +281,34 @@ impl Grove {
                             button(index + 2, icon, label, self.state().dock_visible && self.state().dock_mode == mode).on_click(cx.listener(move |this, _, window, cx| {
                                 window.focus(&this.focus, cx);
                                 this.toggle_dock(mode, cx);
+                                if this.state().terminal_visible() {
+                                    this.ensure_terminal(window, cx);
+                                }
                             }))
                         }),
-                    )
-                    .child(
-                        button(
-                            4,
-                            if self.state().dock_visible { IconName::ChevronDown } else { IconName::ChevronUp },
-                            if self.state().dock_visible { "Hide bottom panel · ⌘J" } else { "Show bottom panel · ⌘J" },
-                            false,
-                        )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            window.focus(&this.focus, cx);
-                            this.toggle_dock_visibility(cx);
-                        })),
                     ),
             )
     }
     pub(super) fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let view = self.view();
-        let typography = &self.settings.repositories;
-        let path = view.selected_worktree.as_ref().unwrap_or(&view.root).clone();
-        let label = view
-            .worktree_data
-            .as_ref()
-            .and_then(|data| data.branch.clone())
-            .or_else(|| view.worktree().map(WorktreeSnapshot::label))
-            .unwrap_or_default();
-        let count = view.snapshot.as_ref().map_or(0, |data| data.repository_list.len());
-        let warning_count = view.snapshot.as_ref().map_or(0, |data| data.warning_list.len()) + view.worktree_data.as_ref().map_or(0, |data| data.warning_list.len());
+        let (memory_label, memory_accessibility_label) = match self.memory_bytes {
+            Some(bytes) => {
+                let label = format!("{:.1} MiB", bytes as f64 / (1024. * 1024.));
+                let accessibility_label = format!("Current process resident memory: {label}");
+                (label, accessibility_label)
+            }
+            None => ("— MiB".to_owned(), "Current process resident memory unavailable".to_owned()),
+        };
         h_flex()
-            .h(px(STATUS_HEIGHT))
+            .h(px(CHROME))
             .flex_shrink_0()
             .items_center()
-            .gap(px(8.))
             .pr(px(10.))
             .bg(rgb(SURFACE))
             .border_t_1()
             .border_color(rgb(BORDER))
             .refine_style(&self.settings.secondary_ui_style())
             .child(
-                div().w(px(RAIL_WIDTH)).h(px(STATUS_HEIGHT)).flex_shrink_0().flex().items_center().justify_center().child(
+                div().w(px(CHROME)).h(px(CHROME)).flex_shrink_0().flex().items_center().justify_center().child(
                     self.icon_button("settings", IconName::Settings, "Settings")
                         .selected(self.settings_open)
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -320,28 +320,14 @@ impl Grove {
                         })),
                 ),
             )
-            .child(icon_view(IconName::GitBranch, 12., ACCENT))
-            .child(div().refine_style(&typography.style()).child(label))
+            .child(div().flex_1())
             .child(
                 div()
-                    .id("copy-worktree-path")
-                    .cursor_pointer()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .refine_style(&typography.style())
+                    .id("process-memory")
+                    .role(Role::Label)
+                    .aria_label(memory_accessibility_label)
                     .text_color(rgb(META))
-                    .child(path.to_string_lossy().into_owned())
-                    .on_click(cx.listener(move |_, _, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(path.to_string_lossy().into_owned())))),
-            )
-            .child(
-                h_flex()
-                    .text_color(rgb(META))
-                    .child(div().refine_style(&typography.style()).child(count.to_string()))
-                    .child(" repositories · ")
-                    .child(div().refine_style(&typography.style()).child(warning_count.to_string()))
-                    .child(" warnings · Git read-only · Terminal"),
+                    .child(memory_label),
             )
     }
 }

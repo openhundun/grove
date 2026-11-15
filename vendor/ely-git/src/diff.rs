@@ -26,6 +26,8 @@ pub struct DiffLine {
     pub new: Option<usize>,
     /// Its text, without its line end.
     pub text: SharedString,
+    /// The source line ends at EOF without a terminating LF.
+    pub no_newline: bool,
     /// The changed words, in bytes, after `mark_words`.
     pub words: Vec<Range<usize>>,
 }
@@ -49,7 +51,8 @@ fn same(text: &str, old: usize, new: usize) -> DiffLine {
         kind: LineKind::Same,
         old: Some(old + 1),
         new: Some(new + 1),
-        text: text.trim_end_matches(['\n', '\r']).to_string().into(),
+        text: text.strip_suffix('\n').unwrap_or(text).to_string().into(),
+        no_newline: !text.ends_with('\n'),
         words: Vec::new(),
     }
 }
@@ -72,7 +75,7 @@ pub fn diff(old: &str, new: &str, context: usize) -> Vec<Stretch> {
             for change in diff.iter_inline_changes(op) {
                 let (mut text, mut words) = (String::new(), Vec::new());
                 for (emphasized, part) in change.iter_strings_lossy() {
-                    let part = part.trim_end_matches(['\n', '\r']);
+                    let part = part.strip_suffix('\n').unwrap_or(&part);
                     if emphasized && !part.is_empty() {
                         words.push(text.len()..text.len() + part.len());
                     }
@@ -88,6 +91,10 @@ pub fn diff(old: &str, new: &str, context: usize) -> Vec<Stretch> {
                     old: change.old_index().map(|ix| ix + 1),
                     new: change.new_index().map(|ix| ix + 1),
                     text: text.into(),
+                    no_newline: match kind {
+                        LineKind::Removed | LineKind::Same => !olds[change.old_index().expect("an old line")].ends_with('\n'),
+                        LineKind::Added => !news[change.new_index().expect("a new line")].ends_with('\n'),
+                    },
                     words: if kind == LineKind::Same { Vec::new() } else { words },
                 });
             }
@@ -234,7 +241,7 @@ mod tests {
 
     #[test]
     fn words_are_marked_on_lines_built_elsewhere() {
-        let line = |kind, text: &str| DiffLine { kind, old: None, new: None, text: text.to_string().into(), words: Vec::new() };
+        let line = |kind, text: &str| DiffLine { kind, old: None, new: None, text: text.to_string().into(), no_newline: false, words: Vec::new() };
         let mut lines = vec![
             line(LineKind::Removed, "let x = 1;"),
             line(LineKind::Removed, "abc"),

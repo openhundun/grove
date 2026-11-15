@@ -28,7 +28,7 @@ pub(super) fn render(source: impl Into<SharedString>, typography: &Typography) -
     let label_style = typography.style();
     MarkdownPreview {
         source: source.clone(),
-        view: TextView::markdown("message", source)
+        view: TextView::markdown("markdown-preview", source)
             .selectable(true)
             .selection_format(SelectionFormat::Source)
             .style(github_style(typography))
@@ -53,7 +53,7 @@ impl IntoElement for MarkdownPreview {
 
 impl RenderOnce for MarkdownPreview {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let cache = window.use_keyed_state("message-code-highlighter", cx, |_, cx| CodeHighlightCache::new(self.source.clone(), cx));
+        let cache = window.use_keyed_state("markdown-code-highlighter", cx, |_, cx| CodeHighlightCache::new(self.source.clone(), cx));
         if cache.read(cx).source != self.source || cache.read(cx).palette != cx.theme().colors.syntax {
             cache.update(cx, |cache, cx| *cache = CodeHighlightCache::new(self.source, cx));
         }
@@ -74,7 +74,7 @@ impl CodeHighlightCache {
     fn new(source: SharedString, cx: &App) -> Self {
         let mut highlight_map = HashMap::new();
         // Base's highlighter callback has no App parameter. Resolve ELY's
-        // language-aware lexer once per message/palette change, then retain
+        // language-aware lexer once per source/palette change, then retain
         // the callback identity so native code blocks reuse their own cache.
         if let Ok(root) = markdown::to_mdast(&source, &markdown::ParseOptions::gfm()) {
             collect_code_highlights(&root, &mut highlight_map, cx);

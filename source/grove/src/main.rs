@@ -15,6 +15,7 @@ use ui::ChangesMode;
 use ui::FilesMode;
 use ui::Grove;
 use ui::HistoryMode;
+use ui::NewTerminal;
 use ui::TerminalMode;
 use ui::ToggleDock;
 
@@ -50,6 +51,7 @@ fn main() {
             KeyBinding::new(grove_platform::MODE_KEY_LIST[3], HistoryMode, Some("Grove")),
             KeyBinding::new("cmd-j", ToggleDock, Some("Grove")),
             KeyBinding::new("ctrl-`", TerminalMode, Some("Grove")),
+            KeyBinding::new("ctrl-t", NewTerminal, Some("Grove")),
         ]);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {

@@ -19,15 +19,53 @@ use std::ops::Range;
 /// A line's place: its stretch, then its line there.
 pub type Place = (usize, usize);
 
+/// A folded stretch keeps its identity and actual unchanged source ranges.
+#[derive(Clone, Debug)]
+pub(super) struct Fold {
+    pub stretch: usize,
+    pub description: SharedString,
+    pub expanded: bool,
+}
+
+impl Fold {
+    fn new(stretch: usize, lines: &[DiffLine], open: &[usize]) -> Self {
+        let range = |old: bool| {
+            let mut number_list = lines.iter().filter_map(|line| if old { line.old } else { line.new });
+            match number_list.next() {
+                Some(first) => match number_list.next_back() {
+                    Some(last) if last != first => format!("{first}–{last}"),
+                    _ => first.to_string(),
+                },
+                None => "∅".to_owned(),
+            }
+        };
+        Self {
+            stretch,
+            description: format!("Unchanged −{} +{} · {} {}", range(true), range(false), lines.len(), if lines.len() == 1 { "line" } else { "lines" }).into(),
+            expanded: open.contains(&stretch),
+        }
+    }
+}
+
 /// A row as the viewer draws it.
 #[derive(Clone)]
 pub(super) enum Shown {
-    /// A hunk's header and its place among the stretches.
-    Header(usize, SharedString),
+    /// A real hunk range, optionally controlling its preceding unchanged stretch.
+    Header(usize, SharedString, Option<Fold>),
     Line(Place, DiffLine),
     Pair(Option<(Place, DiffLine)>, Option<(Place, DiffLine)>),
-    /// A folded stretch: its place and how many lines.
-    Fold(usize, usize),
+    /// Trailing or entirely unchanged context has no following hunk header.
+    Fold(Fold),
+}
+
+fn unchanged_rows(rows: &mut Vec<Shown>, stretch: usize, lines: &[DiffLine], layout: DiffLayout) {
+    rows.extend(lines.iter().enumerate().map(|(at, line)| {
+        let place = (stretch, at);
+        match layout {
+            DiffLayout::Unified => Shown::Line(place, line.clone()),
+            DiffLayout::Split => Shown::Pair(Some((place, line.clone())), Some((place, line.clone()))),
+        }
+    }));
 }
 
 pub(super) fn shown(stretches: &[Stretch], layout: DiffLayout, open: &[usize]) -> Vec<Shown> {
@@ -35,7 +73,14 @@ pub(super) fn shown(stretches: &[Stretch], layout: DiffLayout, open: &[usize]) -
     for (ix, stretch) in stretches.iter().enumerate() {
         match stretch {
             Stretch::Hunk { header, lines } => {
-                rows.push(Shown::Header(ix, header.clone()));
+                let preceding = ix.checked_sub(1).and_then(|previous| match &stretches[previous] {
+                    Stretch::Folded(lines) => Some((previous, lines)),
+                    Stretch::Hunk { .. } => None,
+                });
+                rows.push(Shown::Header(ix, header.clone(), preceding.map(|(previous, lines)| Fold::new(previous, lines, open))));
+                if let Some((previous, lines)) = preceding.filter(|(previous, _)| open.contains(previous)) {
+                    unchanged_rows(&mut rows, previous, lines, layout);
+                }
                 let at = |line: usize| ((ix, line), lines[line].clone());
                 match layout {
                     DiffLayout::Unified => rows.extend((0..lines.len()).map(|line| {
@@ -45,14 +90,13 @@ pub(super) fn shown(stretches: &[Stretch], layout: DiffLayout, open: &[usize]) -
                     DiffLayout::Split => rows.extend(pair_places(lines).into_iter().map(|(left, right)| Shown::Pair(left.map(at), right.map(at)))),
                 }
             }
-            Stretch::Folded(lines) if open.contains(&ix) => rows.extend(lines.iter().enumerate().map(|(at, line)| {
-                let place = (ix, at);
-                match layout {
-                    DiffLayout::Unified => Shown::Line(place, line.clone()),
-                    DiffLayout::Split => Shown::Pair(Some((place, line.clone())), Some((place, line.clone()))),
+            Stretch::Folded(_) if matches!(stretches.get(ix + 1), Some(Stretch::Hunk { .. })) => {}
+            Stretch::Folded(lines) => {
+                rows.push(Shown::Fold(Fold::new(ix, lines, open)));
+                if open.contains(&ix) {
+                    unchanged_rows(&mut rows, ix, lines, layout);
                 }
-            })),
-            Stretch::Folded(lines) => rows.push(Shown::Fold(ix, lines.len())),
+            }
         }
     }
     rows
@@ -74,8 +118,11 @@ pub(super) fn colors_of(text: &str, syntax: Option<&Syntax>, cx: &App) -> Vec<(R
 
 /// A line colored as its file reads, changed words washed.
 pub(super) fn code(line: &DiffLine, colors: &Palette, syntax: Option<&Syntax>, cx: &App) -> StyledText {
+    code_highlighted(line, colors, colors_of(&line.text, syntax, cx))
+}
+
+pub(super) fn code_highlighted(line: &DiffLine, colors: &Palette, mut styles: Vec<(Range<usize>, HighlightStyle)>) -> StyledText {
     let (_, word) = washes(line.kind, colors);
-    let mut styles = colors_of(&line.text, syntax, cx);
     styles.extend(
         line.words
             .iter()
@@ -194,5 +241,54 @@ mod tests {
         let super::Stretch::Hunk { lines, .. } = &stretches[0] else { panic!("a hunk") };
         let said: Vec<String> = lines.iter().map(|line| super::spoken(line).to_string()).collect();
         assert_eq!(said, ["1 a", "2 − b", "2 + c"]);
+    }
+
+    #[test]
+    fn folded_headers_keep_real_ranges_and_identical_controls_after_expansion() {
+        use super::DiffLayout;
+        use super::Shown;
+        use super::Stretch;
+        let old = (1..=30).map(|number| format!("line {number}\n")).collect::<String>();
+        let new = old.replacen("line 10\n", "new 10\n", 1).replacen("line 20\n", "new 20\n", 1);
+        let stretch_list = super::super::diff::diff(&old, &new, 1);
+        let fold_list = stretch_list
+            .iter()
+            .enumerate()
+            .filter_map(|(index, stretch)| matches!(stretch, Stretch::Folded(_)).then_some(index))
+            .collect::<Vec<_>>();
+        assert_eq!(fold_list.len(), 3);
+        for layout in [DiffLayout::Unified, DiffLayout::Split] {
+            let closed = super::shown(&stretch_list, layout, &[]);
+            let expanded = super::shown(&stretch_list, layout, &fold_list);
+            let controls = |row_list: &[Shown]| {
+                row_list
+                    .iter()
+                    .filter_map(|row| match row {
+                        Shown::Header(_, _, Some(fold)) | Shown::Fold(fold) => Some((fold.stretch, fold.description.clone())),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(controls(&closed), controls(&expanded));
+            assert_eq!(controls(&closed).iter().map(|(index, _)| *index).collect::<Vec<_>>(), fold_list);
+            assert!(controls(&closed)[0].1.contains("−1–8 +1–8"));
+            assert!(controls(&closed)[2].1.contains("−22–30 +22–30"));
+            assert!(expanded.len() > closed.len());
+            assert!(matches!(&expanded[0], Shown::Header(_, header, Some(fold)) if header.starts_with("@@ ") && fold.expanded));
+        }
+    }
+
+    #[test]
+    fn entirely_unchanged_stretch_retains_a_non_hunk_close_header() {
+        use super::DiffLayout;
+        use super::Shown;
+        let stretch_list = super::super::diff::diff("one\ntwo\n", "one\ntwo\n", 0);
+        for layout in [DiffLayout::Unified, DiffLayout::Split] {
+            let closed = super::shown(&stretch_list, layout, &[]);
+            let expanded = super::shown(&stretch_list, layout, &[0]);
+            assert_eq!(closed.len(), 1);
+            assert_eq!(expanded.len(), 3);
+            assert!(matches!(&expanded[0], Shown::Fold(fold) if fold.stretch == 0 && fold.expanded && fold.description.as_ref() == "Unchanged −1–2 +1–2 · 2 lines"));
+        }
     }
 }
